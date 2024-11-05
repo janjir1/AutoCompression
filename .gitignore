@@ -1,0 +1,43 @@
+# Virtual environment
+.venv/
+venv/
+
+# VSCode settings
+.vscode/
+
+# Python cache
+__pycache__/
+
+
+# Log files
+*.log
+
+# Environment and dependency files
+*.env
+*.venv
+.env.local
+.venv.local
+Pipfile.lock
+
+# Multimedia files
+*.mp4
+*.mkv
+*.avi
+*.mov
+*.flv
+*.wmv
+*.mp3
+*.wav
+*.flac
+*.m4a
+*.ac3
+*.ogg
+
+#temporary
+*.~*
+*~$*
+*.$*
+
+#Archive and VQA
+Archive/
+FastVQA-and-FasterVQA/
