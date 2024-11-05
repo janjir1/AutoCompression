@@ -313,7 +313,7 @@
         <mxCell id="UUNoeBCxCViC-5x8zwUX-1" value="TODO" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=30;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;" parent="1" vertex="1">
           <mxGeometry x="3085" y="3154" width="280" height="185" as="geometry" />
         </mxCell>
-        <mxCell id="UUNoeBCxCViC-5x8zwUX-2" value="Dont display ffmpeg vhen extracting audio to console&lt;div&gt;&lt;br&gt;&lt;div&gt;Delete VMAFlog.json&lt;/div&gt;&lt;/div&gt;" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;" parent="UUNoeBCxCViC-5x8zwUX-1" vertex="1">
+        <mxCell id="UUNoeBCxCViC-5x8zwUX-2" value="Dont display ffmpeg vhen extracting audio to console&lt;div&gt;&lt;br&gt;&lt;div&gt;Delete VMAFlog.json&lt;/div&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;add tune to loseless for reference cq0 an others&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;enable use on non nvenc devices&lt;/div&gt;" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;" parent="UUNoeBCxCViC-5x8zwUX-1" vertex="1">
           <mxGeometry y="30" width="280" height="155" as="geometry" />
         </mxCell>
       </root>
