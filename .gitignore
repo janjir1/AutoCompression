@@ -32,6 +32,8 @@ Pipfile.lock
 *.m4a
 *.ac3
 *.ogg
+*.jpg
+*.png
 
 #temporary
 *.~*

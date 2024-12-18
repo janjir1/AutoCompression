@@ -41,3 +41,6 @@ print(cq_encoding_cmd)
 
 # Execute constant quality encoding with slow preset
 subprocess.run(cq_encoding_cmd)
+
+#-vf "crop=1920:970:0:60,scale=1280:-2"
+# cmd_extract = ['ffmpeg', '-i', input_video, '-vf', f"select=eq(n\,{frame_number})", '-vsync', 'vfr', '-q:v', '2', output_file]
