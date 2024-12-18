@@ -1,0 +1,42 @@
+# FFmpeg Encoding Settings
+
+# Video settings
+video:
+ -c:v: hevc_nvenc         # Video codec: NVENC HEVC
+ -preset: slow            # Encoding preset: slow for better quality
+ -tune: uhq               # Ultra High Quality tuning
+ -g: 120                  # Group of Pictures size
+ -bf: 4                   # Number of B-frames
+ -refs: 4                 # Number of reference frames
+ -spatial-aq: 1           # Enable spatial adaptive quantization
+ -temporal-aq: 1          # Enable temporal adaptive quantization
+ -aq-strength: 8          # AQ filter strength
+ -pix_fmt: p010le         # Pixel format: 10-bit
+ -b:v: 0                  # Remove bitrate limit
+ -rc-lookahead: 50        # Lookahead for rate control
+ -fps_mode: vfr           # Variable frame rate mode
+ -vf: hqdn3d              # Denoising filter
+
+# Audio settings
+stereo:
+ -c:a: libfdk_aac         # Audio codec: AAC (HE v2)
+ -profile:a: aac_he_v2    # Audio profile
+ -vbr: 3                  # Variable bitrate (audio)
+ -ac: 2                   # Number of audio channels
+
+defalut:
+ -c:a: libfdk_aac         # Audio codec: AAC (HE)
+ -profile:a: aac_he       # Audio profile
+ -vbr: 3                  # Variable bitrate (audio)
+ -ac: 2                   # Number of audio channels
+
+
+# add in program
+
+#ffmpeg
+#-i input file
+#-cq constant quality
+#-s: 1920x1080
+#-threads: 12
+#output
+

@@ -46,12 +46,12 @@ def getVQA(video_path: str, num_of_runs: int = 4) -> int: #enter full path to vi
 
     return average_quality
 
-def getRes_parallel(workspace: str, orig_video_path : str, h_res_values: list, number_of_scenes:int, decode_table: dict, scene_length = 1, cq_value = 1, num_of_VQA_runs: int = 2, threads=6, keep_best_slopes=0.6) -> int: #enter full path to video
+def getRes_parallel(workspace: str, orig_video_path : str, h_res_values: list, number_of_scenes:int, decode_table: dict,  video_profile: list, scene_length = 1, cq_value = 1, num_of_VQA_runs: int = 2, threads=6, keep_best_slopes=0.6,) -> int: #enter full path to video
 
     name = str(os.path.basename(orig_video_path)[:-4]) + "_res"
     video_folder = os.path.join(workspace, name)
 
-    _prepareRes_test(video_folder, orig_video_path, h_res_values, number_of_scenes, scene_length, cq_value)
+    _prepareRes_test(video_folder, orig_video_path, h_res_values, number_of_scenes, scene_length, cq_value, video_profile)
 
     video_paths = list()
     files = [f for f in os.listdir(video_folder) if os.path.isfile(os.path.join(video_folder, f))]
@@ -183,7 +183,7 @@ def _run_VQA_process(video_path, shared_dict, lock):
 
     return process.returncode
 
-def _prepareRes_test(output_folder, file_path, h_res_values, number_of_scenes, scene_length, cq_value):
+def _prepareRes_test(output_folder, file_path, h_res_values, number_of_scenes, scene_length, cq_value, video_profile):
 
     if not os.path.exists(output_folder):
             # Create the directory
@@ -209,19 +209,23 @@ def _prepareRes_test(output_folder, file_path, h_res_values, number_of_scenes, s
                 print(f"Creating test file {output_name}")
 
                     # Define the ffmpeg command as a list of arguments
-                command = [
-                    'ffmpeg',
-                    '-y',                                     # Force overwrite without confirmation
-                    '-ss', str(timestamp*timestep),           # Start time specified by the user
-                    '-i', file_path,                          # Input file
+                command_append = [
                     '-t', str(scene_length),                  # Duration
-                    '-c:v', 'hevc_nvenc',                     # Use GPU with NVIDIA NVENC for H.265
-                    '-preset', 'slow',                        # Preset for encoding speed/quality
                     '-cq', str(cq_value),                     # Constant Quality mode
-                    '-vf', f'scale={str(h_resolution)}:-1',   # Scale video width and maintain aspect ratio                
+                    #'-vf', f'scale={str(h_resolution)}:-1',   # Scale video width and maintain aspect ratio                
                     '-an',                                    # Disable audio
+                    '-y',                                      # overvrite
                     output_path                               # Output file
                 ]
+
+                command_prepend =[
+                    "ffmpeg",             # Command to run FFmpeg
+                    "-ss", str(timestep*timestamp),     # Seek to the calculated timestamp
+                    "-i", file_path      # Input file path
+                ]
+
+                command = command_prepend + video_profile + command_append
+                
 
                 testsFFMPEG(command)
 
@@ -229,6 +233,7 @@ def testsFFMPEG(command) -> None:
 
     # Run the command and wait for it to complete
     process = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    #process = subprocess.run(command)
 
     # Check if the process completed successfully
     if process.returncode != 0:
@@ -326,7 +331,7 @@ def getVMAF(reference_file, distorted_file, threads=8) -> float:
         print(f"FFmpeg finished with errors. Exit code: {process.returncode}")
         print(process.stderr)  # Display the error output
 
-def getCQ(workspace: str, orig_video_path : str, h_res, cq_values: list, number_of_scenes:int, threashold_variable: float, cq_reference = 1, scene_length = 60, threads=6, keep_best_scenes=0.6, video_encoding_preset = "slow") -> float:
+def getCQ(workspace: str, orig_video_path : str, h_res, cq_values: list, number_of_scenes:int, threashold_variable: float, video_profile: list, cq_reference = 1, scene_length = 60, threads=6, keep_best_scenes=0.6) -> float:
     
     if len(cq_values) != 4:
         print("cq values list different size")
@@ -360,7 +365,7 @@ def getCQ(workspace: str, orig_video_path : str, h_res, cq_values: list, number_
 
             print(f"Creating reference file {output_name}")
          
-            _createAndTestVMAF(output_path, orig_video_path, h_res, cq_reference, timestamp*timestep, scene_length, None, threads, video_encoding_preset)
+            _createAndTestVMAF(output_path, orig_video_path, h_res, cq_reference, timestamp*timestep, scene_length, video_profile, None, threads)
             reference_files.append(output_path)
         reference_files.sort() #this will break with 9 or more scenes
 
@@ -380,13 +385,13 @@ def getCQ(workspace: str, orig_video_path : str, h_res, cq_values: list, number_
 
                 print(f"Getting VMAF result for: {output_name}")
             
-                results[timestamp][cq_values[position]] = _createAndTestVMAF(output_path, orig_video_path, h_res, cq_values[position], timestamp*timestep, scene_length, reference_files[timestamp-1], threads, video_encoding_preset)
+                results[timestamp][cq_values[position]] = _createAndTestVMAF(output_path, orig_video_path, h_res, cq_values[position], timestamp*timestep, scene_length, video_profile, reference_files[timestamp-1], threads)
 
         #get optimized VMAF value
         output_name = f"1_{cq_values[1]}.mp4"
         output_path = os.path.join(video_folder, output_name)
         print(f"Getting VMAF result for: {output_name}")
-        optimization_VMAF = _createAndTestVMAF(output_path, orig_video_path, h_res, cq_values[1], 1*timestep, scene_length, reference_files[0], threads, video_encoding_preset)
+        optimization_VMAF = _createAndTestVMAF(output_path, orig_video_path, h_res, cq_values[1], 1*timestep, scene_length, video_profile, reference_files[0], threads)
 
         for key in results.keys():
             results[key]
@@ -433,22 +438,34 @@ def getCQ(workspace: str, orig_video_path : str, h_res, cq_values: list, number_
     #endregion
         return target_cq
 
-def _createAndTestVMAF(output_path: str, orig_video_path : str, h_res, cq_value, start_time, scene_length, reference_video = None, threads = 6, video_encoding_preset = "slow"):
+def _createAndTestVMAF(output_path: str, orig_video_path : str, h_res, cq_value, start_time, scene_length, video_profile: list, reference_video = None, threads = 6):
 
-        # Define the ffmpeg command as a list of arguments
-    command = [
-        'ffmpeg',
-        '-y',                                     # Force overwrite without confirmation
-        '-ss', str(start_time),           # Start time specified by the user
-        '-i', orig_video_path,                          # Input file
+    #add resolution filter to alreadz existing filters
+    resolution_filter = f'scale={str(h_res)}:-1'
+    try:
+        index = video_profile.index("-vf")
+        video_profile[index+1] = video_profile[index+1] + "," + resolution_filter
+    except ValueError:
+        video_profile.append("-vf")
+        video_profile.append(resolution_filter)
+
+    command_append = [
         '-t', str(scene_length),                  # Duration
-        '-c:v', 'hevc_nvenc',                     # Use GPU with NVIDIA NVENC for H.265
-        '-preset', video_encoding_preset,                        # Preset for encoding speed/quality
         '-cq', str(cq_value),                     # Constant Quality mode
-        '-vf', f'scale={str(h_res)}:-1',   # Scale video width and maintain aspect ratio                
+        #'-vf', f'scale={str(h_resolution)}:-1',   # Scale video width and maintain aspect ratio                
         '-an',                                    # Disable audio
+        '-y',                                      # overvrite
         output_path                               # Output file
     ]
+
+    command_prepend =[
+        "ffmpeg",             # Command to run FFmpeg
+        "-ss", str(start_time),     # Seek to the calculated timestamp
+        "-i", orig_video_path      # Input file path
+    ]
+
+    command = command_prepend + video_profile + command_append
+
 
     testsFFMPEG(command)
 

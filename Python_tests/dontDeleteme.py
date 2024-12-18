@@ -37,5 +37,7 @@ cq_encoding_cmd = [
     output_file
 ]
 
+print(cq_encoding_cmd)
+
 # Execute constant quality encoding with slow preset
 subprocess.run(cq_encoding_cmd)
