@@ -6,6 +6,7 @@ import time
 import math
 import numpy as np
 import soundfile as sf
+from PIL import Image
 
 #Meassure video using FasterVQA, number of runs for averaging
 def getVQA(video_path: str, num_of_runs: int = 4) -> int: #enter full path to video
@@ -559,7 +560,69 @@ def _extractAudio(orig_video_path: str, work_folder: str, duration: int) -> None
     except Exception as e:
         print(f"An error occurred: {e}")
 
+def detectBlackbars(orig_video_path: str, workspace: str, frames_to_detect: int) -> tuple:
+    
+    name = str(os.path.basename(orig_video_path)[:-4]) + "_blackDetection"
+    work_folder = os.path.join(workspace, name)
+
+    if not os.path.exists(work_folder):
+            # Create the directory
+            os.makedirs(work_folder)
+            print(f'Directory "{work_folder}" created.')
+
+    movie_duration = getDuration(orig_video_path)
+    timestep = movie_duration/frames_to_detect
+
+    black_top = list()
+    black_bottom = list()
+
+    for timestamp in range(frames_to_detect):
+        timestamp = timestamp + 1
+
+        picture_name = str(timestamp) + ".png"
+        target_name = os.path.join(work_folder, picture_name)
+        exportFrame(orig_video_path, target_name, timestamp*timestep)
+
+        im = Image.open(target_name, 'r')
+        pix = im.load()
+
+        for i in range(0, im.size[1], 1):
+            if (pix[im.size[0]/2, i] == (0, 0, 0)):
+                black_top[timestamp-1] += 1
+            else:
+                break
+
+        for i in range(im.size[1]-1, -1, -1):
+            if (pix[im.size[0]/2, i] == (0, 0, 0)):
+                black_bottom[timestamp-1] += 1
+            else:
+                break
+
+    print(black_top)
+    print(black_bottom)
+
+    return min(black_top), min(black_bottom)
+
+
+def exportFrame(orig_video_path: str, target_name_path: str, time: int, png_quality: int = 2) -> None:
+
+    command = [
+    'ffmpeg', '-ss', f"{time}", '-i', orig_video_path,
+    '-vframes', '1', '-q:v', str(png_quality), target_name_path
+    ]
+
+    process = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    #process = subprocess.run(command)
+
+    # Check if the process completed successfully
+    if process.returncode != 0:
+        print(f"FFmpeg finished with errors. Exit code: {process.returncode}")
+        print(process.stderr)
+
+
+
 if __name__ == '__main__':
+    """
     decode_table =  {854: -10, 1280: -1e-04, 1920: -6.9e-05, 3840: -4e-05}
     workaspace = r"D:\Files\Projects\AutoCompression\Tests\Martan"
     file = r"E:\Filmy\hrané\Drama\Marťan-2015-Cz-Dabing-HD.mkv"
@@ -571,3 +634,11 @@ if __name__ == '__main__':
     print(f"this took {end - start}s")
     print(f"res: {target_res}, cq: {taret_cq}")
     print(f"audio ch: {audio_channels}")
+    """
+    workaspace = r"D:\Files\Projects\AutoCompression\Tests\Martan"
+    file = r"E:\Filmy\hrané\Drama\Marťan-2015-Cz-Dabing-HD.mkv"
+    start = time.time()
+    crop_top, crop_bottom = detectBlackbars(file, workaspace, 10)
+    end = time.time()
+    print(f"this took {end - start}s")
+    print(f'top:{crop_top}, bottom: {crop_bottom}')
