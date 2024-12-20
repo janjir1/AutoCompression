@@ -536,7 +536,7 @@ def getNumOfChannels(orig_video_path: str, workspace: str, simmilarity_cutoff: f
     if not os.path.exists(work_folder):
             # Create the directory
             os.makedirs(work_folder)
-            logger.info(f'Directory "{work_folder}" created.')
+            logger.debug(f'Directory "{work_folder}" created.')
 
     act_duration = getDuration(orig_video_path)
 
