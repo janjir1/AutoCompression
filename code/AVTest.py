@@ -7,6 +7,10 @@ import math
 import numpy as np
 import soundfile as sf
 from PIL import Image
+import logging
+
+# Retrieve the logger once at the module level
+logger = logging.getLogger("AppLogger")
 
 #Meassure video using FasterVQA, number of runs for averaging
 def getVQA(video_path: str, num_of_runs: int = 4) -> int: #enter full path to video
@@ -28,12 +32,12 @@ def getVQA(video_path: str, num_of_runs: int = 4) -> int: #enter full path to vi
             
             # Check for errors
             if process.returncode != 0:
-                print(f"Script exited with error code {process.returncode}")
+                logger.error(f"Script exited with error code {process.returncode}")
                 error_output = process.stderr.read()
-                print("Error Output:", error_output)
+                logger.error("Error Output:", error_output)
 
         except Exception as e:
-            print(f"An error occurred: {str(e)}")
+            logger.error(f"An error occurred: {str(e)}")
 
         #Parse the output
         for line in output_lines:
@@ -87,9 +91,11 @@ def getRes_parallel(workspace: str, orig_video_path : str, h_res_values: list, n
             sorted_dict[sample][res] = VQA_result
         else:
             sorted_dict[sample][res] = VQA_result
-
+    logger.debug("Processed VQA data:")
+    logger.debug(sorted_dict)
     #determine regression slope for each scene
     regression_slope = list()
+    logger.debug("regression slope:")
     for scene in sorted_dict.keys():
         res = sorted_dict[scene].keys()
         res_min = int(sorted(res)[1])
@@ -98,9 +104,10 @@ def getRes_parallel(workspace: str, orig_video_path : str, h_res_values: list, n
         VQA_res_max = float(sorted_dict[scene][str(res_max)])
         slope = (VQA_res_max-VQA_res_min)/(res_max-res_min)
         regression_slope.append(slope)
+        logger.debug("{scene}: {slope}")
 
-    if __name__ == '__main__':
-        print(regression_slope)
+    logger.debug("average:")
+    logger.debug(regression_slope)
 
     #remove worst scenes and make average
     regression_slope = sorted(regression_slope, reverse=True)
@@ -112,7 +119,7 @@ def getRes_parallel(workspace: str, orig_video_path : str, h_res_values: list, n
         average_slope = average_slope + value
     average_slope = average_slope/len(regression_slope)
 
-    print(f"average slope is: {average_slope}")
+    logger.debug(f"average slope is: {average_slope}")
 
     #Assign res to average slope
     target_res = 854
@@ -127,7 +134,7 @@ def getRes_parallel(workspace: str, orig_video_path : str, h_res_values: list, n
     if target_res > orig_res:
         target_res = orig_res
 
-    print(f"Original resolution: {orig_res}, Target resolution: {target_res}")
+    logger.info(f"Original resolution: {orig_res}, Target resolution: {target_res}")
     return target_res
 
 def _run_VQA_process(video_path, shared_dict, lock):
@@ -144,7 +151,7 @@ def _run_VQA_process(video_path, shared_dict, lock):
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, shell=True)
     
     type = str(process.pid)
-    print(f"Calculating VQA on file {name}")
+    logger.info(f"Calculating VQA on file {name}")
 
     output_lines = []
     try:
@@ -156,12 +163,12 @@ def _run_VQA_process(video_path, shared_dict, lock):
         
         # Check for errors
         if process.returncode != 0:
-            print(f"Script exited with error code {process.returncode}")
+            logger.error(f"Script exited with error code {process.returncode}")
             error_output = process.stderr.read()
-            print("Error Output:", error_output)
+            logger.error("Error Output:", error_output)
 
     except Exception as e:
-        print(f"An error occurred: {str(e)}")
+        logger.error(f"An error occurred: {str(e)}")
 
     #Parse the output
     for line in output_lines:
@@ -169,6 +176,7 @@ def _run_VQA_process(video_path, shared_dict, lock):
             match = re.search(r'\b0\.\d+', line)
             if match:
                 VQA = float(match.group())
+                logger.debug("Calculated VQA: {VQA}")
 
     # Append this process's output to the shared list
     with lock:
@@ -197,7 +205,7 @@ def _prepareRes_test(output_folder, file_path, h_res_values, number_of_scenes, s
     if not os.path.exists(output_folder):
             # Create the directory
             os.makedirs(output_folder)
-            print(f'Directory "{output_folder}" created.')
+            logger.info(f'Directory "{output_folder}" created.')
 
     duration = getDuration(file_path)
 
@@ -215,7 +223,7 @@ def _prepareRes_test(output_folder, file_path, h_res_values, number_of_scenes, s
 
                 results[output_name] = dict()
 
-                print(f"Creating test file {output_name}")
+                logger.debug(f"Creating test file {output_name}")
 
                 #add resolution crop filter to alreadz existing filters
                 resolution_filter = vfCropComandGenerator(file_path, crop, h_resolution)
@@ -250,15 +258,15 @@ def _prepareRes_test(output_folder, file_path, h_res_values, number_of_scenes, s
 
 def testsFFMPEG(command) -> None:
 
-    #print(command)
+    logger.debug(f"ffmpeg command: {command}")
     # Run the command and wait for it to complete
     process = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     #process = subprocess.run(command)
 
     # Check if the process completed successfully
     if process.returncode != 0:
-        print(f"FFmpeg finished with errors. Exit code: {process.returncode}")
-        print(process.stderr) 
+        logger.error(f"FFmpeg finished with errors. Exit code: {process.returncode}")
+        logger.error(process.stderr) 
 
 def getDuration(input_path:str) -> int:
 
@@ -276,26 +284,26 @@ def getDuration(input_path:str) -> int:
     
     # Check if the command was successful
     if result.returncode != 0:
-        print(f"Error occurred while running ffprobe: {result.stderr}")
+        logger.error(f"Error occurred while running ffprobe: {result.stderr}")
         return None
 
     # Parse the JSON output
     ffprobe_output = result.stdout
     
     if not ffprobe_output:
-        print("No output received from ffprobe.")
+        logger.error("No output received from ffprobe.")
         return None
     
     data = None
     try:
         data = json.loads(ffprobe_output)
     except json.JSONDecodeError:
-        print("Error decoding JSON output.")
+        logger.error("Error decoding JSON output.")
         return None
     
     # Extract duration from the JSON data
     if 'format' not in data or 'duration' not in data['format']:
-        print("Duration information is missing in the JSON output.")
+        logger.error("Duration information is missing in the JSON output.")
         return None
     
     duration = data['format']['duration']
@@ -318,7 +326,7 @@ def getH_res(video_path: str) -> int:
         width = int(ffprobe_output['streams'][0]['width'])
         return width
     except Exception as e:
-        print(f"An error occurred: {e}")
+        logger.error(f"An error occurred: {e}")
         return None
     
 def getV_res(video_path: str) -> int:
@@ -337,7 +345,7 @@ def getV_res(video_path: str) -> int:
         height = int(ffprobe_output['streams'][0]['height'])
         return height
     except Exception as e:
-        print(f"An error occurred: {e}")
+        logger.error(f"An error occurred: {e}")
         return None
     
 def getVMAF(reference_file, distorted_file, threads=8) -> float:
@@ -350,13 +358,13 @@ def getVMAF(reference_file, distorted_file, threads=8) -> float:
         '-lavfi', f'libvmaf=n_threads={threads}:log_path={output_file}',  # VMAF with multithreading and log output
         '-f', 'null', '-'            # No output file, just compute VMAF
     ]
-    #print(command)
+    logger.debug(f"ffmpeg vmaf command: {command}")
     # Run the command and wait for it to complete
     process = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
     # Check if the process completed successfully
     if process.returncode == 0:
-        print(f"VMAF calculation completed successfully")
+        logger.info(f"VMAF calculation completed successfully")
         # Load the VMAF results from the output file
         with open("VMAFlog.json", 'r') as file:
             for line in file:
@@ -367,13 +375,13 @@ def getVMAF(reference_file, distorted_file, threads=8) -> float:
                 
                     return vmaf_score
     else:
-        print(f"FFmpeg finished with errors. Exit code: {process.returncode}")
-        print(process.stderr)  # Display the error output
+        logger.error(f"FFmpeg finished with errors. Exit code: {process.returncode}")
+        logger.error(process.stderr)  # Display the error output
 
 def getCQ(workspace: str, orig_video_path : str, h_res, cq_values: list, number_of_scenes:int, threashold_variable: float, video_profile: list, crop: list, cq_reference = 1, scene_length = 60, threads=6, keep_best_scenes=0.6) -> float:
     
     if len(cq_values) != 4:
-        print("cq values list different size")
+        logger.error("cq values list different size")
         return
     
     cq_values.sort()
@@ -384,7 +392,7 @@ def getCQ(workspace: str, orig_video_path : str, h_res, cq_values: list, number_
     if not os.path.exists(video_folder):
             # Create the directory
             os.makedirs(video_folder)
-            print(f'Directory "{video_folder}" created.')
+            logger.debug(f'Directory "{video_folder}" created.')
 
     duration = getDuration(orig_video_path)
 
@@ -402,7 +410,7 @@ def getCQ(workspace: str, orig_video_path : str, h_res, cq_values: list, number_
             output_name = f"{timestamp}_reference.mp4"
             output_path = os.path.join(video_folder, output_name)
 
-            print(f"Creating reference file {output_name}")
+            logger.debug(f"Creating reference file {output_name}")
          
             _createAndTestVMAF(output_path, orig_video_path, h_res, cq_reference, timestamp*timestep, scene_length, video_profile, crop, None, threads)
             reference_files.append(output_path)
@@ -422,14 +430,14 @@ def getCQ(workspace: str, orig_video_path : str, h_res, cq_values: list, number_
                 output_name = f"{timestamp}_{cq_values[position]}.mp4"
                 output_path = os.path.join(video_folder, output_name)
 
-                print(f"Getting VMAF result for: {output_name}")
+                logger.debug(f"Getting VMAF result for: {output_name}")
             
                 results[timestamp][cq_values[position]] = _createAndTestVMAF(output_path, orig_video_path, h_res, cq_values[position], timestamp*timestep, scene_length, video_profile, crop, reference_files[timestamp-1], threads)
 
         #get optimized VMAF value
         output_name = f"1_{cq_values[1]}.mp4"
         output_path = os.path.join(video_folder, output_name)
-        print(f"Getting VMAF result for: {output_name}")
+        logger.debug(f"Getting VMAF result for: {output_name}")
         optimization_VMAF = _createAndTestVMAF(output_path, orig_video_path, h_res, cq_values[1], 1*timestep, scene_length, video_profile, crop, reference_files[0], threads)
 
         for key in results.keys():
@@ -451,21 +459,23 @@ def getCQ(workspace: str, orig_video_path : str, h_res, cq_values: list, number_
             x = np.array(list(subtracted_results[key].keys()))  # The x-values
             y = np.array(list(subtracted_results[key].values()))  # The y-values
             a, b, c = np.polyfit(x, y, 2)
+            logger.debug("CQ polynomial: {a}, {b}, {c}")
             discriminant = b**2 - 4*a*(c-threashold_variable)
+            logger.debug("CQ discriminant: {discriminant}")
             if discriminant >= 0:
                 solution = (-b + np.sqrt(discriminant)) / (2 * a)
                 calculated_CQs.append(solution)
             else:
-                print("No solution was found")
+                logger.error("No solution was found")
 
         #remove worst scenes and make average
         calculated_CQs = sorted(calculated_CQs)
-        if __name__ == '__main__':
-            print(calculated_CQs)
+        logger.debug("calculated CQs:")
+        logger.debug(calculated_CQs)
         to_keep = math.ceil(len(calculated_CQs)*keep_best_scenes)
         calculated_CQs = calculated_CQs[:to_keep]
-
-        print(calculated_CQs)
+        logger.debug("Filtered CQs")
+        logger.debug(calculated_CQs)
 
         target_cq = 0
         for value in calculated_CQs:
@@ -473,7 +483,7 @@ def getCQ(workspace: str, orig_video_path : str, h_res, cq_values: list, number_
         target_cq = target_cq/len(calculated_CQs)
 
         target_cq = round(target_cq * 2) / 2
-        print(f"Video has calculated CQ of {target_cq}")
+        logger.info(f"Video has calculated CQ of {target_cq}")
     #endregion
         return target_cq
 
@@ -510,7 +520,9 @@ def _createAndTestVMAF(output_path: str, orig_video_path : str, h_res, cq_value,
     testsFFMPEG(command)
 
     if reference_video is not None:
-        return getVMAF(reference_video, output_path, threads)
+        VMAF_value = getVMAF(reference_video, output_path, threads)
+        logger.debug(VMAF_value)
+        return VMAF_value
     else:
         return None
 
@@ -524,7 +536,7 @@ def getNumOfChannels(orig_video_path: str, workspace: str, simmilarity_cutoff: f
     if not os.path.exists(work_folder):
             # Create the directory
             os.makedirs(work_folder)
-            print(f'Directory "{work_folder}" created.')
+            logger.info(f'Directory "{work_folder}" created.')
 
     act_duration = getDuration(orig_video_path)
 
@@ -536,10 +548,10 @@ def getNumOfChannels(orig_video_path: str, workspace: str, simmilarity_cutoff: f
         num_channels = y.shape[1] if len(y.shape) > 1 else 1  # Determine the number of channels
 
         if num_channels == 1:
-            print("The audio file has only one channel (mono). No comparison needed.")
+            logger.info("The audio file has only one channel (mono). No comparison needed.")
             return
 
-        print(f"The audio file has {num_channels} channels. Comparing channels using MSE:")
+        logger.debug(f"The audio file has {num_channels} channels. Comparing channels using MSE:")
 
         mse_list = list()
         channel_list = [True] * num_channels
@@ -557,11 +569,9 @@ def getNumOfChannels(orig_video_path: str, workspace: str, simmilarity_cutoff: f
                     channel_list[i] = False
 
                 mse_list.append(mse)
-                if __name__ == '__main__':
-                    print(f"MSE between channel {i + 1} and channel {j + 1}: {mse}")
+                logger.debug(f"MSE between channel {i + 1} and channel {j + 1}: {mse}")
 
-        if __name__ == '__main__':
-            print(channel_list)
+        logger.debug(channel_list)
 
         output = list()
         for i in range(len(channel_list)):
@@ -571,8 +581,8 @@ def getNumOfChannels(orig_video_path: str, workspace: str, simmilarity_cutoff: f
         if len(output) == 0:
             return 1
         
-        print(f"There are at least {len(output)} uniqe channels:")
-        print(output)
+        logger.info(f"There are at least {len(output)} uniqe channels:")
+        logger.info(output)
         if len(output) == 3:
             return 4
         if len(output) >= 5:
@@ -580,7 +590,6 @@ def getNumOfChannels(orig_video_path: str, workspace: str, simmilarity_cutoff: f
         return len(output)
 
 def _extractAudio(orig_video_path: str, work_folder: str, duration: int) -> None: 
-
 
     try:
             
@@ -592,12 +601,12 @@ def _extractAudio(orig_video_path: str, work_folder: str, duration: int) -> None
         # Run FFmpeg command to extract the audio
         extract_command = ["ffmpeg", "-i", orig_video_path, "-vn", "-acodec", "pcm_s16le", "-t", str(duration), output_audio, "-y"]
         subprocess.run(extract_command)
-        print(f"Audio extracted to: {output_audio}")
+        logger.debug(f"Audio extracted to: {output_audio}")
         return output_audio
 
     
     except Exception as e:
-        print(f"An error occurred: {e}")
+        logger.error(f"An error occurred: {e}")
 
 def detectBlackbars(orig_video_path: str, workspace: str, frames_to_detect: int) -> list:
     
@@ -607,7 +616,7 @@ def detectBlackbars(orig_video_path: str, workspace: str, frames_to_detect: int)
     if not os.path.exists(work_folder):
             # Create the directory
             os.makedirs(work_folder)
-            print(f'Directory "{work_folder}" created.')
+            logger.debug(f'Directory "{work_folder}" created.')
 
     movie_duration = getDuration(orig_video_path)
     timestep = int(movie_duration/(frames_to_detect+1))
@@ -641,10 +650,9 @@ def detectBlackbars(orig_video_path: str, workspace: str, frames_to_detect: int)
     black_top_result = min(black_top)
     black_bottom_result = min(black_bottom)
     if black_bottom_result != 0 or black_top_result != 0:
-        print(f"Black bars detected: {black_top_result}pix from top, {black_bottom_result}pix from bottom")
-
-    #print(black_top)
-    #print(black_bottom)
+        logger.info(f"Black bars detected: {black_top_result}pix from top, {black_bottom_result}pix from bottom")
+    else:
+        logger.info("No black bars detected")
 
     return [black_top_result, black_bottom_result]
 
@@ -656,14 +664,17 @@ def exportFrame(orig_video_path: str, target_name_path: str, time: int, png_qual
     '-frames:v', '1', '-q:v', str(png_quality), '-update', '1', '-y', target_name_path
     ]
 
+    logger.debug("Export frame ffmpeg command")
+    logger.debug(command)
+
 
     process = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     #process = subprocess.run(command)
 
     # Check if the process completed successfully
     if process.returncode != 0:
-        print(f"FFmpeg finished with errors. Exit code: {process.returncode}")
-        print(process.stderr)
+        logger.error(f"FFmpeg finished with errors. Exit code: {process.returncode}")
+        logger.error(process.stderr)
 
 
 
