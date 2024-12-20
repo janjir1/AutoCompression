@@ -104,7 +104,7 @@ def getRes_parallel(workspace: str, orig_video_path : str, h_res_values: list, n
         VQA_res_max = float(sorted_dict[scene][str(res_max)])
         slope = (VQA_res_max-VQA_res_min)/(res_max-res_min)
         regression_slope.append(slope)
-        logger.debug("{scene}: {slope}")
+        logger.debug(f"{scene}: {slope}")
 
     logger.debug("average:")
     logger.debug(regression_slope)
@@ -364,7 +364,7 @@ def getVMAF(reference_file, distorted_file, threads=8) -> float:
 
     # Check if the process completed successfully
     if process.returncode == 0:
-        logger.info(f"VMAF calculation completed successfully")
+        logger.debug(f"VMAF calculation completed successfully")
         # Load the VMAF results from the output file
         with open("VMAFlog.json", 'r') as file:
             for line in file:
@@ -459,9 +459,9 @@ def getCQ(workspace: str, orig_video_path : str, h_res, cq_values: list, number_
             x = np.array(list(subtracted_results[key].keys()))  # The x-values
             y = np.array(list(subtracted_results[key].values()))  # The y-values
             a, b, c = np.polyfit(x, y, 2)
-            logger.debug("CQ polynomial: {a}, {b}, {c}")
+            logger.debug(f"CQ polynomial: {a}, {b}, {c}")
             discriminant = b**2 - 4*a*(c-threashold_variable)
-            logger.debug("CQ discriminant: {discriminant}")
+            logger.debug(f"CQ discriminant: {discriminant}")
             if discriminant >= 0:
                 solution = (-b + np.sqrt(discriminant)) / (2 * a)
                 calculated_CQs.append(solution)

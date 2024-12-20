@@ -33,7 +33,7 @@ if __name__ == '__main__':
             print(f'Directory "{workaspace}" created.')
 
     log_path = os.path.join(workaspace, "app.log")
-    logger = setup_logger(log_level=logging.DEBUG, log_file=log_path)
+    logger = setup_logger(log_level=logging.INFO, log_file=log_path)
 
     #region logger begginig
     logger.info("Starting AV conversion script.")
