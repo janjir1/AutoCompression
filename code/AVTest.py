@@ -47,12 +47,12 @@ def getVQA(video_path: str, num_of_runs: int = 4) -> int: #enter full path to vi
 
     return average_quality
 
-def getRes_parallel(workspace: str, orig_video_path : str, h_res_values: list, number_of_scenes:int, decode_table: dict,  video_profile: list, scene_length = 1, cq_value = 1, num_of_VQA_runs: int = 2, threads=6, keep_best_slopes=0.6,) -> int: #enter full path to video
+def getRes_parallel(workspace: str, orig_video_path : str, h_res_values: list, number_of_scenes:int, decode_table: dict,  video_profile: list, crop: list, scene_length = 1, cq_value = 1, num_of_VQA_runs: int = 2, threads=6, keep_best_slopes=0.6,) -> int: #enter full path to video
 
     name = str(os.path.basename(orig_video_path)[:-4]) + "_res"
     video_folder = os.path.join(workspace, name)
 
-    _prepareRes_test(video_folder, orig_video_path, h_res_values, number_of_scenes, scene_length, cq_value, video_profile)
+    _prepareRes_test(video_folder, orig_video_path, h_res_values, number_of_scenes, scene_length, cq_value, video_profile, crop)
 
     video_paths = list()
     files = [f for f in os.listdir(video_folder) if os.path.isfile(os.path.join(video_folder, f))]
@@ -184,7 +184,15 @@ def _run_VQA_process(video_path, shared_dict, lock):
 
     return process.returncode
 
-def _prepareRes_test(output_folder, file_path, h_res_values, number_of_scenes, scene_length, cq_value, video_profile):
+def vfCropComandGenerator(file_path: str, crop: list, target_h_res: int) -> str:
+    h_res_orig = getH_res(file_path)
+    v_res_orig = getV_res(file_path)
+    target_v_res = v_res_orig - crop[0] - crop[1]
+    #-vf "crop=1920:970:0:60,scale=1280:-2"
+    command = f"crop={h_res_orig}:{target_v_res}:0:{crop[0]},scale={target_h_res}:-2"
+    return command
+
+def _prepareRes_test(output_folder, file_path, h_res_values, number_of_scenes, scene_length, cq_value, video_profile, crop):
 
     if not os.path.exists(output_folder):
             # Create the directory
@@ -209,6 +217,16 @@ def _prepareRes_test(output_folder, file_path, h_res_values, number_of_scenes, s
 
                 print(f"Creating test file {output_name}")
 
+                #add resolution crop filter to alreadz existing filters
+                resolution_filter = vfCropComandGenerator(file_path, crop, h_resolution)
+                video_profile_modified = video_profile.copy()
+                try:
+                    index = video_profile_modified.index("-vf")
+                    video_profile_modified[index+1] = video_profile_modified[index+1] + "," + resolution_filter
+                except ValueError:
+                    video_profile_modified.append("-vf")
+                    video_profile_modified.append(resolution_filter)
+
                     # Define the ffmpeg command as a list of arguments
                 command_append = [
                     '-t', str(scene_length),                  # Duration
@@ -225,13 +243,14 @@ def _prepareRes_test(output_folder, file_path, h_res_values, number_of_scenes, s
                     "-i", file_path      # Input file path
                 ]
 
-                command = command_prepend + video_profile + command_append
+                command = command_prepend + video_profile_modified + command_append
                 
 
                 testsFFMPEG(command)
 
 def testsFFMPEG(command) -> None:
 
+    #print(command)
     # Run the command and wait for it to complete
     process = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     #process = subprocess.run(command)
@@ -301,7 +320,26 @@ def getH_res(video_path: str) -> int:
     except Exception as e:
         print(f"An error occurred: {e}")
         return None
+    
+def getV_res(video_path: str) -> int:
+    # ffprobe command to get the stream info in JSON format
+    command = [
+        "ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+        "stream=height", "-of", "json", video_path
+    ]
 
+    # Run the command and capture the output
+    try:
+        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        # Parse the JSON output
+        ffprobe_output = json.loads(result.stdout)
+        # Extract the height from the 'height' field in the stream
+        height = int(ffprobe_output['streams'][0]['height'])
+        return height
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return None
+    
 def getVMAF(reference_file, distorted_file, threads=8) -> float:
      # Define the ffmpeg command to compute VMAF with multithreading
     output_file = r"VMAFlog.json"
@@ -332,7 +370,7 @@ def getVMAF(reference_file, distorted_file, threads=8) -> float:
         print(f"FFmpeg finished with errors. Exit code: {process.returncode}")
         print(process.stderr)  # Display the error output
 
-def getCQ(workspace: str, orig_video_path : str, h_res, cq_values: list, number_of_scenes:int, threashold_variable: float, video_profile: list, cq_reference = 1, scene_length = 60, threads=6, keep_best_scenes=0.6) -> float:
+def getCQ(workspace: str, orig_video_path : str, h_res, cq_values: list, number_of_scenes:int, threashold_variable: float, video_profile: list, crop: list, cq_reference = 1, scene_length = 60, threads=6, keep_best_scenes=0.6) -> float:
     
     if len(cq_values) != 4:
         print("cq values list different size")
@@ -366,7 +404,7 @@ def getCQ(workspace: str, orig_video_path : str, h_res, cq_values: list, number_
 
             print(f"Creating reference file {output_name}")
          
-            _createAndTestVMAF(output_path, orig_video_path, h_res, cq_reference, timestamp*timestep, scene_length, video_profile, None, threads)
+            _createAndTestVMAF(output_path, orig_video_path, h_res, cq_reference, timestamp*timestep, scene_length, video_profile, crop, None, threads)
             reference_files.append(output_path)
         reference_files.sort() #this will break with 9 or more scenes
 
@@ -386,13 +424,13 @@ def getCQ(workspace: str, orig_video_path : str, h_res, cq_values: list, number_
 
                 print(f"Getting VMAF result for: {output_name}")
             
-                results[timestamp][cq_values[position]] = _createAndTestVMAF(output_path, orig_video_path, h_res, cq_values[position], timestamp*timestep, scene_length, video_profile, reference_files[timestamp-1], threads)
+                results[timestamp][cq_values[position]] = _createAndTestVMAF(output_path, orig_video_path, h_res, cq_values[position], timestamp*timestep, scene_length, video_profile, crop, reference_files[timestamp-1], threads)
 
         #get optimized VMAF value
         output_name = f"1_{cq_values[1]}.mp4"
         output_path = os.path.join(video_folder, output_name)
         print(f"Getting VMAF result for: {output_name}")
-        optimization_VMAF = _createAndTestVMAF(output_path, orig_video_path, h_res, cq_values[1], 1*timestep, scene_length, video_profile, reference_files[0], threads)
+        optimization_VMAF = _createAndTestVMAF(output_path, orig_video_path, h_res, cq_values[1], 1*timestep, scene_length, video_profile, crop, reference_files[0], threads)
 
         for key in results.keys():
             results[key]
@@ -439,16 +477,17 @@ def getCQ(workspace: str, orig_video_path : str, h_res, cq_values: list, number_
     #endregion
         return target_cq
 
-def _createAndTestVMAF(output_path: str, orig_video_path : str, h_res, cq_value, start_time, scene_length, video_profile: list, reference_video = None, threads = 6):
+def _createAndTestVMAF(output_path: str, orig_video_path : str, h_res, cq_value, start_time, scene_length, video_profile: list, crop: list, reference_video = None, threads = 6):
 
     #add resolution filter to alreadz existing filters
-    resolution_filter = f'scale={str(h_res)}:-1'
+    resolution_filter = vfCropComandGenerator(orig_video_path, crop, h_res)
+    video_profile_modified = video_profile.copy()
     try:
-        index = video_profile.index("-vf")
-        video_profile[index+1] = video_profile[index+1] + "," + resolution_filter
+        index = video_profile_modified.index("-vf")
+        video_profile_modified[index+1] = video_profile_modified[index+1] + "," + resolution_filter
     except ValueError:
-        video_profile.append("-vf")
-        video_profile.append(resolution_filter)
+        video_profile_modified.append("-vf")
+        video_profile_modified.append(resolution_filter)
 
     command_append = [
         '-t', str(scene_length),                  # Duration
@@ -465,7 +504,7 @@ def _createAndTestVMAF(output_path: str, orig_video_path : str, h_res, cq_value,
         "-i", orig_video_path      # Input file path
     ]
 
-    command = command_prepend + video_profile + command_append
+    command = command_prepend + video_profile_modified + command_append
 
 
     testsFFMPEG(command)
@@ -560,7 +599,7 @@ def _extractAudio(orig_video_path: str, work_folder: str, duration: int) -> None
     except Exception as e:
         print(f"An error occurred: {e}")
 
-def detectBlackbars(orig_video_path: str, workspace: str, frames_to_detect: int) -> tuple:
+def detectBlackbars(orig_video_path: str, workspace: str, frames_to_detect: int) -> list:
     
     name = str(os.path.basename(orig_video_path)[:-4]) + "_blackDetection"
     work_folder = os.path.join(workspace, name)
@@ -571,10 +610,10 @@ def detectBlackbars(orig_video_path: str, workspace: str, frames_to_detect: int)
             print(f'Directory "{work_folder}" created.')
 
     movie_duration = getDuration(orig_video_path)
-    timestep = movie_duration/frames_to_detect
+    timestep = int(movie_duration/(frames_to_detect+1))
 
-    black_top = list()
-    black_bottom = list()
+    black_top = [0] * frames_to_detect
+    black_bottom = [0] * frames_to_detect
 
     for timestamp in range(frames_to_detect):
         timestamp = timestamp + 1
@@ -582,34 +621,41 @@ def detectBlackbars(orig_video_path: str, workspace: str, frames_to_detect: int)
         picture_name = str(timestamp) + ".png"
         target_name = os.path.join(work_folder, picture_name)
         exportFrame(orig_video_path, target_name, timestamp*timestep)
+        
 
         im = Image.open(target_name, 'r')
         pix = im.load()
 
         for i in range(0, im.size[1], 1):
-            if (pix[im.size[0]/2, i] == (0, 0, 0)):
+            if all(channel < 10 for channel in pix[im.size[0] // 2, i]):
                 black_top[timestamp-1] += 1
             else:
                 break
 
         for i in range(im.size[1]-1, -1, -1):
-            if (pix[im.size[0]/2, i] == (0, 0, 0)):
+            if all(channel < 10 for channel in pix[im.size[0] // 2, i]):
                 black_bottom[timestamp-1] += 1
             else:
                 break
 
-    print(black_top)
-    print(black_bottom)
+    black_top_result = min(black_top)
+    black_bottom_result = min(black_bottom)
+    if black_bottom_result != 0 or black_top_result != 0:
+        print(f"Black bars detected: {black_top_result}pix from top, {black_bottom_result}pix from bottom")
 
-    return min(black_top), min(black_bottom)
+    #print(black_top)
+    #print(black_bottom)
 
+    return [black_top_result, black_bottom_result]
 
 def exportFrame(orig_video_path: str, target_name_path: str, time: int, png_quality: int = 2) -> None:
 
+    #print(time)
     command = [
     'ffmpeg', '-ss', f"{time}", '-i', orig_video_path,
-    '-vframes', '1', '-q:v', str(png_quality), target_name_path
+    '-frames:v', '1', '-q:v', str(png_quality), '-update', '1', '-y', target_name_path
     ]
+
 
     process = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     #process = subprocess.run(command)
@@ -636,9 +682,9 @@ if __name__ == '__main__':
     print(f"audio ch: {audio_channels}")
     """
     workaspace = r"D:\Files\Projects\AutoCompression\Tests\Martan"
-    file = r"E:\Filmy\hrané\Drama\Marťan-2015-Cz-Dabing-HD.mkv"
+    file = r"E:\Filmy\hrané\Fantasy\Na hraně zítřka SD.avi"
     start = time.time()
-    crop_top, crop_bottom = detectBlackbars(file, workaspace, 10)
+    crop = detectBlackbars(file, workaspace, 9)
+    print(vfCropComandGenerator(file, crop, 720))
     end = time.time()
     print(f"this took {end - start}s")
-    print(f'top:{crop_top}, bottom: {crop_bottom}')
