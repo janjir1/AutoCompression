@@ -242,6 +242,7 @@ def _prepareRes_test(output_folder, file_path, h_res_values, number_of_scenes, s
                     #'-vf', f'scale={str(h_resolution)}:-1',   # Scale video width and maintain aspect ratio                
                     '-an',                                    # Disable audio
                     '-y',                                      # overvrite
+                    "-sn",                                      # disable subtitles
                     output_path                               # Output file
                 ]
 
@@ -505,6 +506,7 @@ def _createAndTestVMAF(output_path: str, orig_video_path : str, h_res, cq_value,
         #'-vf', f'scale={str(h_resolution)}:-1',   # Scale video width and maintain aspect ratio                
         '-an',                                    # Disable audio
         '-y',                                      # overvrite
+        "-sn",                                     # disable subtitles
         output_path                               # Output file
     ]
 
