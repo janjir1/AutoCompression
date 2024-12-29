@@ -2,7 +2,7 @@ import yaml
 import AVTest
 import logging
 from logger_setup import setup_logger
-import os, subprocess
+import os, subprocess, traceback
 
 
 def compressAV(file: str, workspace: str, profile_path: str) -> bool:
@@ -20,8 +20,10 @@ def compressAV(file: str, workspace: str, profile_path: str) -> bool:
 
     try:
         profile, settings = readProfile(profile_path)
-    except:
+    except Exception as e:
         logger.error("Not able to read profile")
+        logger.debug("Failed due to reason:")
+        logger.debug("".join(traceback.format_exception(type(e), e, e.__traceback__)))
         return False
     
     #region logger begginig
@@ -38,44 +40,59 @@ def compressAV(file: str, workspace: str, profile_path: str) -> bool:
     logger.debug(profile)
    
     orig_file_size_GB = os.stat(file).st_size / (1024 * 1024 * 1024)
-    logger.info(f"Original file is {orig_file_size_GB}GB")
+    logger.info(f"Original file is {orig_file_size_GB:.3f}GB")
+
+    #region Tests
 
     try:
         orig_res = AVTest.getH_res(file)
         logger.info(f"Original resolution is {orig_res}")
-    except:
+    except Exception as e:
         logger.error("Not able to detect horiontal resolution")
+        logger.debug("Failed due to reason:")
+        logger.debug("".join(traceback.format_exception(type(e), e, e.__traceback__)))
         return False
 
     try:
         crop = AVTest.detectBlackbars(file, workspace, 10)
-    except:
+    except Exception as e:
         logger.warning("Black bar detection failed")
+        logger.debug("Failed due to reason:")
+        logger.debug("".join(traceback.format_exception(type(e), e, e.__traceback__)))
         crop = [0, 0]
         logger.info(f"Black bars set as {crop[0]}, {crop[1]}")
 
     try:
-        target_res = AVTest.getRes_parallel(workspace, file, [854, 3840], 20, profile["settings"], profile["video"], crop, num_of_VQA_runs=2)
-    except:
+        target_res = AVTest.getRes_parallel(workspace, file, [854, 3840], 15, settings["res_decode"], profile["video"], crop, num_of_VQA_runs=3)
+    except Exception as e:
         logger.warning("Resolution detection failed")
+        logger.debug("Failed due to reason:")
+        logger.debug("".join(traceback.format_exception(type(e), e, e.__traceback__)))
         logger.info("Keeping original resolution")
+        target_res = orig_res
+        
 
     try:
-        target_cq = AVTest.getCQ(workspace, file, target_res, [15, 18, 27, 36], 5, profile["settings"], profile["video"], crop, scene_length=50, threads=6)
-    except:
+        target_cq = AVTest.getCQ(workspace, file, target_res, [15, 18, 27, 36], 3, settings["cq_threashold"], profile["video"], crop, scene_length=50, threads=6)
+    except Exception as e:
         logger.warning("CQ test failed")
+        logger.debug("Failed due to reason:")
+        logger.debug("".join(traceback.format_exception(type(e), e, e.__traceback__)))
         target_cq = settings["defalut_cq"]
         logger.info(f"Video has calculated CQ of {target_cq}")
 
     try:
         channels = AVTest.getNumOfChannels(file, workspace, 0.001, 3600)
-    except:
+    except Exception as e:
         logger.warning("Unable to get number of audio chanels")
+        logger.debug("Failed due to reason:")
+        logger.debug("".join(traceback.format_exception(type(e), e, e.__traceback__)))
         channels = 2
         logger.info(f"Export will have {channels} channels")
 
+    #region FFMPEG
     #add resolution filter to alreadz existing filters
-    resolution_filter = AVTest.vfCropComandGenerator(file, crop, orig_res)
+    resolution_filter = AVTest.vfCropComandGenerator(file, crop, target_res)
     video_profile_modified = profile["video"].copy()
 
     try:
@@ -92,8 +109,8 @@ def compressAV(file: str, workspace: str, profile_path: str) -> bool:
     ]
 
     command_prepend =[
-        "ffmpeg",             # Command to run FFmpeg
-        "-i", file            # Input file path
+        "ffmpeg",                                  # Command to run FFmpeg
+        "-i", file                                 # Input file path
     ]
 
     if "stereo" in profile and channels == 2:
@@ -111,6 +128,7 @@ def compressAV(file: str, workspace: str, profile_path: str) -> bool:
         logger.error(process.stderr)
         return False
     
+    #region Post
     if not os.path.isfile(output_file):
         logger.error("output file not found")
         return False
@@ -122,8 +140,8 @@ def compressAV(file: str, workspace: str, profile_path: str) -> bool:
         logger.error("Output is less then 1 culster (4kB)")
         return False
     
-    logger.info(f"Output file is {output_file_size_GB}GB")
-    logger.info(f"Output file is {orig_file_size_GB/output_file_size_GB}x size of original")
+    logger.info(f"Output file is {output_file_size_GB:.3f}GB")
+    logger.info(f"Output file is {(orig_file_size_GB/output_file_size_GB):.3f}x size of original")
     return True
 
     
@@ -143,9 +161,9 @@ def readProfile(yaml_file):
     return profile, settings
 
 if __name__ == '__main__':
-    file = ""
+    file = r"E:\Filmy\hrané\Komedie\Alvin a Chipmunkove 2 SD.avi"
     profile_path = r"Profiles\h265_slow_nvenc.yaml"
-    workspace = ""
+    workspace = r"D:\Files\Projects\AutoCompression\workspace"
     log_path = os.path.join(workspace, "app.log")
     logger = setup_logger(log_level=logging.INFO, log_file=log_path)
     passed = compressAV(file, workspace, profile_path)

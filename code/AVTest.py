@@ -12,6 +12,7 @@ import logging
 # Retrieve the logger once at the module level
 logger = logging.getLogger("AppLogger")
 
+# region singlethread VQA
 #Meassure video using FasterVQA, number of runs for averaging
 def getVQA(video_path: str, num_of_runs: int = 4) -> int: #enter full path to video
 
@@ -51,6 +52,7 @@ def getVQA(video_path: str, num_of_runs: int = 4) -> int: #enter full path to vi
 
     return average_quality
 
+# region getRes_parallel
 def getRes_parallel(workspace: str, orig_video_path : str, h_res_values: list, number_of_scenes:int, decode_table: dict,  video_profile: list, crop: list, scene_length = 1, cq_value = 1, num_of_VQA_runs: int = 2, threads=6, keep_best_slopes=0.6,) -> int: #enter full path to video
 
     name = str(os.path.basename(orig_video_path)[:-4]) + "_res"
@@ -165,7 +167,8 @@ def _run_VQA_process(video_path, shared_dict, lock):
         if process.returncode != 0:
             logger.error(f"Script exited with error code {process.returncode}")
             error_output = process.stderr.read()
-            logger.error("Error Output:", error_output)
+            logger.error("Error Output:")
+            logger.error(error_output)
 
     except Exception as e:
         logger.error(f"An error occurred: {str(e)}")
@@ -256,7 +259,7 @@ def _prepareRes_test(output_folder, file_path, h_res_values, number_of_scenes, s
                 
 
                 testsFFMPEG(command)
-
+# region tests FFMPEG
 def testsFFMPEG(command) -> None:
 
     logger.debug(f"ffmpeg command: {command}")
@@ -379,6 +382,7 @@ def getVMAF(reference_file, distorted_file, threads=8) -> float:
         logger.error(f"FFmpeg finished with errors. Exit code: {process.returncode}")
         logger.error(process.stderr)  # Display the error output
 
+# region getCQ
 def getCQ(workspace: str, orig_video_path : str, h_res, cq_values: list, number_of_scenes:int, threashold_variable: float, video_profile: list, crop: list, cq_reference = 1, scene_length = 60, threads=6, keep_best_scenes=0.6) -> float:
     
     if len(cq_values) != 4:
@@ -445,7 +449,6 @@ def getCQ(workspace: str, orig_video_path : str, h_res, cq_values: list, number_
             results[key]
             results[key][cq_values[1]] = optimization_VMAF
 
-    #region calculation
         #calculate VMAF difference to cq15
         subtracted_results = dict()
         for scene in results.keys():
@@ -528,6 +531,7 @@ def _createAndTestVMAF(output_path: str, orig_video_path : str, h_res, cq_value,
     else:
         return None
 
+#region Num of Channels
 def getNumOfChannels(orig_video_path: str, workspace: str, simmilarity_cutoff: float, duration: int)-> int:
 
     name = str(os.path.basename(orig_video_path)[:-4]) + "_channels"
@@ -602,14 +606,13 @@ def _extractAudio(orig_video_path: str, work_folder: str, duration: int) -> None
         
         # Run FFmpeg command to extract the audio
         extract_command = ["ffmpeg", "-i", orig_video_path, "-vn", "-acodec", "pcm_s16le", "-t", str(duration), output_audio, "-y"]
-        subprocess.run(extract_command)
-        logger.debug(f"Audio extracted to: {output_audio}")
-        return output_audio
+        process = subprocess.run(extract_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
     
     except Exception as e:
         logger.error(f"An error occurred: {e}")
 
+#region Blackbars
 def detectBlackbars(orig_video_path: str, workspace: str, frames_to_detect: int) -> list:
     
     name = str(os.path.basename(orig_video_path)[:-4]) + "_blackDetection"
