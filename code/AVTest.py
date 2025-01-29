@@ -200,6 +200,7 @@ def vfCropComandGenerator(file_path: str, crop: list, target_h_res: int) -> str:
     v_res_orig = getV_res(file_path)
     target_v_res = v_res_orig - crop[0] - crop[1]
     #-vf "crop=1920:970:0:60,scale=1280:-2"
+    #TODO not constant flag neighbour for res test, lacroz for everything else
     command = f"crop={h_res_orig}:{target_v_res}:0:{crop[0]},scale={target_h_res}:-2:sws_flags=neighbor"
     return command
 
@@ -238,7 +239,7 @@ def _prepareRes_test(output_folder, file_path, h_res_values, number_of_scenes, s
                     video_profile_modified.append("-vf")
                     video_profile_modified.append(resolution_filter)
                     #TODO cq for h265 and crf for av1
-                    #TODO -hwaccel for software
+                    #TODO -hwaccel for different hw configs
                     # Define the ffmpeg command as a list of arguments
                 command_append = [
                     '-t', str(scene_length),                  # Duration

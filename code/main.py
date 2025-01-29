@@ -170,6 +170,6 @@ if __name__ == '__main__':
             print(f'Directory "{workspace}" created.')
 
     log_path = os.path.join(workspace, "app.log")
-    logger = setup_logger(log_level=logging.DEBUG, log_file=log_path)
+    logger = setup_logger(log_level=logging.INFO, log_file=log_path)
     passed = compressAV(file, workspace, profile_path, 4)
     print(passed)
