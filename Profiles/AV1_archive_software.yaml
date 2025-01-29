@@ -1,0 +1,17 @@
+# FFmpeg Encoding Settings
+
+# Video settings
+video:
+ -pix_fmt: yuv420p10le
+ -c:v: libsvtav1
+ -preset: 3
+ -svtav1-params: "enable-dlf=1:enable-cdef=1:enable-restoration=1:enable-tpl-la=1:enable-tf=1:tune=1:enable-overlays=1:keyint=-1:fast-decode=1"
+
+test_settings:
+ cq_threashold: 1.02
+ res_decode:
+  854: !!float -10
+  1280: !!float -1e-04
+  1920: !!float -6.9e-05
+  3840: !!float -3e-05
+ defalut_cq: 26

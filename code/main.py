@@ -5,7 +5,7 @@ from logger_setup import setup_logger
 import os, subprocess, traceback
 
 
-def compressAV(file: str, workspace: str, profile_path: str) -> bool:
+def compressAV(file: str, workspace: str, profile_path: str, threads: int) -> bool:
 
     if not os.path.isfile(file):
         logger.error("file not found")
@@ -63,7 +63,7 @@ def compressAV(file: str, workspace: str, profile_path: str) -> bool:
         logger.info(f"Black bars set as {crop[0]}, {crop[1]}")
 
     try:
-        target_res = AVTest.getRes_parallel(workspace, file, [854, 3840], 15, settings["res_decode"], profile["video"], crop, num_of_VQA_runs=3)
+        target_res = AVTest.getRes_parallel(workspace, file, [854, 3840], 15, settings["res_decode"], profile["video"], crop, num_of_VQA_runs=3, threads=threads)
     except Exception as e:
         logger.warning("Resolution detection failed")
         logger.debug("Failed due to reason:")
@@ -73,7 +73,7 @@ def compressAV(file: str, workspace: str, profile_path: str) -> bool:
         
 
     try:
-        target_cq = AVTest.getCQ(workspace, file, target_res, [15, 18, 27, 36], 3, settings["cq_threashold"], profile["video"], crop, scene_length=50, threads=6)
+        target_cq = AVTest.getCQ(workspace, file, target_res, [15, 18, 27, 36], 3, settings["cq_threashold"], profile["video"], crop, scene_length=50, threads=threads)
     except Exception as e:
         logger.warning("CQ test failed")
         logger.debug("Failed due to reason:")
@@ -82,7 +82,7 @@ def compressAV(file: str, workspace: str, profile_path: str) -> bool:
         logger.info(f"Video has calculated CQ of {target_cq}")
 
     try:
-        channels = AVTest.getNumOfChannels(file, workspace, 0.001, 3600)
+        channels = AVTest.getNumOfChannels(file, workspace, 0.001, 1200)
     except Exception as e:
         logger.warning("Unable to get number of audio chanels")
         logger.debug("Failed due to reason:")
@@ -137,7 +137,7 @@ def compressAV(file: str, workspace: str, profile_path: str) -> bool:
 
     output_file_size_GB = os.stat(output_file).st_size / (1024 * 1024 * 1024)
     if output_file_size_GB < 0.0000039101:
-        logger.error("Output is less then 1 culster (4kB)")
+        logger.error("Output is less then 1 cluster (4kB)")
         return False
     
     logger.info(f"Output file is {output_file_size_GB:.3f}GB")
@@ -163,8 +163,13 @@ def readProfile(yaml_file):
 if __name__ == '__main__':
     file = r"E:\Filmy\hrané\Komedie\Alvin a Chipmunkove 2 SD.avi"
     profile_path = r"Profiles\h265_slow_nvenc.yaml"
-    workspace = r"D:\Files\Projects\AutoCompression\workspace"
+    workspace = r"D:\Files\Projects\AutoCompression\workspace\Alvin"
+    if not os.path.exists(workspace):
+            # Create the directory
+            os.makedirs(workspace)
+            print(f'Directory "{workspace}" created.')
+
     log_path = os.path.join(workspace, "app.log")
-    logger = setup_logger(log_level=logging.INFO, log_file=log_path)
-    passed = compressAV(file, workspace, profile_path)
+    logger = setup_logger(log_level=logging.DEBUG, log_file=log_path)
+    passed = compressAV(file, workspace, profile_path, 4)
     print(passed)

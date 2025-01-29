@@ -19,21 +19,21 @@ def readProfile(yaml_file):
     return profile
 
 
-yaml_profile_file = r'D:\Files\Projects\AutoCompression\Profiles\h265_slow_nvenc.yaml'
+yaml_profile_file = r'D:\Files\Projects\AutoCompression\Profiles\AV1_archive_software.yaml'
 decode_table =  {854: -10, 1280: -1e-04, 1920: -6.9e-05, 3840: -4e-05}
 threashold_variable = 0.6
-workaspaces = r"D:\Files\Projects\AutoCompression\Tests"
+workaspaces = r"D:\Files\Projects\AutoCompression\Tests\workspaces"
 files = [
         #r"E:\Filmy\hrané\Super-heroes\Marvel\Avengers Infinity War CZ dabing-5.1 1080pHD 2018..mkv",
-        #r"E:\Filmy\hrané\Super-heroes\Marvel\Black Panther 2018 Full HD CZ dabing.mkv",
-        #r"E:\Filmy\hrané\Super-heroes\Marvel\Thor 2 (Temny svet) (720x304).avi",
+        r"E:\Filmy\hrané\Super-heroes\Marvel\Black Panther 2018 Full HD CZ dabing.mkv",
+        r"E:\Filmy\hrané\Super-heroes\Marvel\Thor 2 (Temny svet) (720x304).avi",
         #r"E:\Filmy\hrané\Sci-fi\Star Wars\Star-Wars 6 Návrat Jediho SD.avi",
-        #r"E:\Filmy\hrané\Sci-fi\Star Wars\'Star Wars I - Hviezdne vojny - Epizóda I - Skrytá hrozba    1999  1080p  5.1 CZ 5.1 SK 5.1 ENG.mkv",
-        #r"E:\Filmy\hrané\Komedie\Alvin a Chipmunkove 2 SD.avi",
+        r"E:\Filmy\hrané\Sci-fi\Star Wars\'Star Wars I - Hviezdne vojny - Epizóda I - Skrytá hrozba    1999  1080p  5.1 CZ 5.1 SK 5.1 ENG.mkv",
+        r"E:\Filmy\hrané\Komedie\Alvin a Chipmunkove 2 SD.avi",
         #r"E:\Filmy\hrané\Komedie\Free.Guy.CZ.mkv",
-        #r"E:\Filmy\hrané\Fantasy\Eragon HD.avi",
-        #r"E:\Filmy\hrané\Fantasy\Cruella.mkv",
-        #r"E:\Filmy\4K\Dune1.mkv",
+        #r"E:\Filmy\hrané\Fantasy\Eragon HD.avi"#,
+        r"E:\Filmy\hrané\Fantasy\Cruella.mkv",
+        r"E:\Filmy\4K\Dune1.mkv",
         r"E:\Filmy\4K\Oppenheimer.2023.2160p.mkv",
         r"E:\Filmy\4K\interstellar.2014.2160p.uhd.bluray.x265-terminal.mkv",
         r"E:\Filmy\hrané\Action\300 Bitva u Thermopyl HD.mkv",
@@ -75,9 +75,9 @@ if __name__ == '__main__':
         logger.debug(profile)
 
         crop = AVTest.detectBlackbars(file, workaspace, 10)
-        target_res = AVTest.getRes_parallel(workaspace, file, [854, 3840], 20, decode_table, profile["video"], crop, num_of_VQA_runs=2)
-        taret_cq = AVTest.getCQ(workaspace, file, target_res, [15, 18, 27, 36], 5, threashold_variable, profile["video"], crop, scene_length=50, threads=6)
-        print(f"res: {target_res}, cq: {taret_cq}")
-        #print(f"res: {target_res}")
+        target_res = AVTest.getRes_parallel(workaspace, file, [854, 3840], 15, decode_table, profile["video"], crop, num_of_VQA_runs=2, threads=4)
+        #taret_cq = AVTest.getCQ(workaspace, file, target_res, [15, 18, 27, 36], 3, threashold_variable, profile["video"], crop, scene_length=50, threads=6)
+        #print(f"res: {target_res}, cq: {taret_cq}")
+        print(f"res: {target_res}")
 
 

@@ -84,8 +84,8 @@ def calculate_execution_time(file_path):
     return str(total_execution_time)
 
 
-f = open("log_output.txt", "w")
-root_dir = r"C:\Soubory\AutoCompression\Tests"
+f = open("log_output_AV1.txt", "w")
+root_dir = r"D:\Files\Projects\AutoCompression\Tests\full_bilinear"
 
 for root, dirs, files in os.walk(root_dir):
     if 'app.log' in files:

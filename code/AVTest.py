@@ -1,5 +1,5 @@
 import subprocess
-import re, os
+import re, os, sys
 import json
 from multiprocessing import Pool, Manager
 import time
@@ -19,7 +19,7 @@ def getVQA(video_path: str, num_of_runs: int = 4) -> int: #enter full path to vi
     quality_score = []
     
     for i in range(num_of_runs):
-        command = ["python", "./FastVQA-and-FasterVQA/vqa.py", "-v", video_path]
+        command = [sys.executable, "./FastVQA-and-FasterVQA/vqa.py", "-v", video_path]
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
         # Capture the output in real-time
@@ -148,7 +148,7 @@ def _run_VQA_process(video_path, shared_dict, lock):
 
     name = os.path.basename(video_path)[:-4]
 
-    command = ["python", "./FastVQA-and-FasterVQA/vqa.py", "-v", video_path]
+    command = [sys.executable, "./FastVQA-and-FasterVQA/vqa.py", "-v", video_path]
 
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, shell=True)
     
@@ -200,7 +200,7 @@ def vfCropComandGenerator(file_path: str, crop: list, target_h_res: int) -> str:
     v_res_orig = getV_res(file_path)
     target_v_res = v_res_orig - crop[0] - crop[1]
     #-vf "crop=1920:970:0:60,scale=1280:-2"
-    command = f"crop={h_res_orig}:{target_v_res}:0:{crop[0]},scale={target_h_res}:-2"
+    command = f"crop={h_res_orig}:{target_v_res}:0:{crop[0]},scale={target_h_res}:-2:sws_flags=neighbor"
     return command
 
 def _prepareRes_test(output_folder, file_path, h_res_values, number_of_scenes, scene_length, cq_value, video_profile, crop):
@@ -237,11 +237,12 @@ def _prepareRes_test(output_folder, file_path, h_res_values, number_of_scenes, s
                 except ValueError:
                     video_profile_modified.append("-vf")
                     video_profile_modified.append(resolution_filter)
-
+                    #TODO cq for h265 and crf for av1
+                    #TODO -hwaccel for software
                     # Define the ffmpeg command as a list of arguments
                 command_append = [
                     '-t', str(scene_length),                  # Duration
-                    '-cq', str(cq_value),                     # Constant Quality mode
+                    '-crf', str(cq_value),                     # Constant Quality mode
                     #'-vf', f'scale={str(h_resolution)}:-1',   # Scale video width and maintain aspect ratio                
                     '-an',                                    # Disable audio
                     '-y',                                      # overvrite
@@ -252,6 +253,7 @@ def _prepareRes_test(output_folder, file_path, h_res_values, number_of_scenes, s
                 command_prepend =[
                     "ffmpeg",             # Command to run FFmpeg
                     "-ss", str(timestep*timestamp),     # Seek to the calculated timestamp
+                    "-hwaccel",  "cuda",
                     "-i", file_path      # Input file path
                 ]
 
@@ -505,7 +507,7 @@ def _createAndTestVMAF(output_path: str, orig_video_path : str, h_res, cq_value,
 
     command_append = [
         '-t', str(scene_length),                  # Duration
-        '-cq', str(cq_value),                     # Constant Quality mode
+        '-crf', str(cq_value),                     # Constant Quality mode
         #'-vf', f'scale={str(h_resolution)}:-1',   # Scale video width and maintain aspect ratio                
         '-an',                                    # Disable audio
         '-y',                                      # overvrite
@@ -516,6 +518,7 @@ def _createAndTestVMAF(output_path: str, orig_video_path : str, h_res, cq_value,
     command_prepend =[
         "ffmpeg",             # Command to run FFmpeg
         "-ss", str(start_time),     # Seek to the calculated timestamp
+        "-hwaccel",  "cuda",
         "-i", orig_video_path      # Input file path
     ]
 
@@ -606,11 +609,14 @@ def _extractAudio(orig_video_path: str, work_folder: str, duration: int) -> None
         
         # Run FFmpeg command to extract the audio
         extract_command = ["ffmpeg", "-i", orig_video_path, "-vn", "-acodec", "pcm_s16le", "-t", str(duration), output_audio, "-y"]
+        logger.debug(f"ffmpeg command: {extract_command}")
         process = subprocess.run(extract_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-
+        return output_audio
     
     except Exception as e:
         logger.error(f"An error occurred: {e}")
+
+
 
 #region Blackbars
 def detectBlackbars(orig_video_path: str, workspace: str, frames_to_detect: int) -> list:

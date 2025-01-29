@@ -38,12 +38,3 @@ test_settings:
   1920: !!float -6.9e-05
   3840: !!float -3e-05
  defalut_cq: 26
-# add in program
-
-#ffmpeg
-#-i input file
-#-cq constant quality
-#-s: 1920x1080
-#-threads: 12
-#output
-

@@ -1,8 +1,10 @@
 import subprocess
 import re
 import os
+import sys
 
-folder_path = r"D:\Files\Projects\AutoCompression\Tests\Dune2"
+
+folder_path = r"E:\Filmy\hrané\Action\Top Gun Maverick (2022) [1080p] [BluRay] [5.1] [YTS.MX]"
 #Meassure eveerzthing in a folder.
 
 for filename in os.listdir(folder_path):
@@ -10,13 +12,14 @@ for filename in os.listdir(folder_path):
     if filename.endswith('.mp4'):
         # Full path of the file
         video_path = os.path.join(folder_path, filename)
-
+        print(sys.path)
         first_frame = ""
         quality_score = []
         #Meassure video using FasterVQA number of times for averaging
         for i in range(4):
             # Command to run the script with -v and the Windows path
-            command = ["python", "./FastVQA-and-FasterVQA/vqa.py", "-v", video_path]
+            command = [sys.executable, "./FastVQA-and-FasterVQA/vqa.py", "-v", video_path]
+            #subprocess.run([sys.executable, "./FastVQA-and-FasterVQA/vqa.py"])
             process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
             output_lines = []
