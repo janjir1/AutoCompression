@@ -1,0 +1,10 @@
+2025-02-08 16:58:29,560 [INFO] Starting AV conversion script.
+2025-02-08 16:58:29,561 [INFO] file path: E:\Filmy\hrané\Komedie\Alvin a Chipmunkove 2 SD.avi
+2025-02-08 16:58:29,561 [INFO] workspace path: D:\Files\Projects\AutoCompression\workspace\Alvin
+2025-02-08 16:58:29,561 [INFO] profile path: Profiles\h265_slow_nvenc.yaml
+2025-02-08 16:58:29,561 [DEBUG] resolution decode table:
+2025-02-08 16:58:29,561 [DEBUG] {854: -10.0, 1280: -0.0001, 1920: -6.9e-05, 3840: -3e-05}
+2025-02-08 16:58:29,561 [DEBUG] quality threashold value: 0.57
+2025-02-08 16:58:29,561 [DEBUG] Profile values:
+2025-02-08 16:58:29,561 [DEBUG] {'video': ['-c:v', 'hevc_nvenc', '-preset', 'slow', '-tune', 'uhq', '-g', '120', '-bf', '4', '-refs', '4', '-spatial-aq', '1', '-temporal-aq', '1', '-aq-strength', '8', '-pix_fmt', 'p010le', '-b:v', '0', '-rc-lookahead', '50', '-vf', 'hqdn3d'], 'stereo': ['-c:a', 'libfdk_aac', '-profile:a', 'aac_he_v2', '-vbr', '3', '-ac', '2'], 'audio': ['-c:a', 'libfdk_aac', '-profile:a', 'aac_he', '-vbr', '3', '-ac', '2'], 'test_settings': ['cq_threashold', '0.57', 'res_decode', '{854: -10.0, 1280: -0.0001, 1920: -6.9e-05, 3840: -3e-05}', 'defalut_cq', '26']}
+2025-02-08 16:58:29,562 [INFO] Original file is 0.684GB

@@ -14,7 +14,6 @@ video:
  -pix_fmt: p010le         # Pixel format: 10-bit
  -b:v: 0                  # Remove bitrate limit
  -rc-lookahead: 50        # Lookahead for rate control
- -fps_mode: vfr           # Variable frame rate mode
  -vf: hqdn3d              # Denoising filter
 
 # Audio settings

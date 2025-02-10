@@ -36,6 +36,7 @@ Pipfile.lock
 *.~*
 *~$*
 *.$*
+VMAFlog.json
 
 #Archive and VQA
 Archive/

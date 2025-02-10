@@ -14,4 +14,4 @@ test_settings:
   1280: !!float -1e-04
   1920: !!float -6.9e-05
   3840: !!float -3e-05
- defalut_cq: 26
+ defalut_cq: 28
