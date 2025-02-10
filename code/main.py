@@ -94,7 +94,7 @@ def compressAV(file: str, workspace: str, profile_path: str, threads: int) -> bo
 
     orig_res, crop, target_res, target_cq, channels = runTests(file, workspace, profile, settings, threads)
     #TODO dynamic metadata and dolby vision
-    output_metadata, metadata_file = get_video_metadata(file, workspace)
+
 
     #region FFMPEG
     #add resolution filter to alreadz existing filters
@@ -107,8 +107,6 @@ def compressAV(file: str, workspace: str, profile_path: str, threads: int) -> bo
     except ValueError:
         video_profile_modified.append("-vf")
         video_profile_modified.append(resolution_filter)
-
-    video_profile_modified += output_metadata
 
     command_append = [
         '-cq', str(target_cq),                     # Constant Quality mode                
