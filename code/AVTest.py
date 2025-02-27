@@ -9,6 +9,8 @@ import soundfile as sf
 from PIL import Image
 import logging
 
+#TODO: add cleanup
+
 # Retrieve the logger once at the module level
 logger = logging.getLogger("AppLogger")
 

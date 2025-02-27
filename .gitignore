@@ -31,6 +31,13 @@ Pipfile.lock
 *.ogg
 *.jpg
 *.png
+*.yuv
+*.hevc
+*.ivf
+
+# metadata
+*_metadata.*
+
 
 #temporary
 *.~*
@@ -41,3 +48,4 @@ VMAFlog.json
 #Archive and VQA
 Archive/
 FastVQA-and-FasterVQA/
+

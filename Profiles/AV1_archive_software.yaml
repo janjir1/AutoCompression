@@ -1,11 +1,13 @@
-# FFmpeg Encoding Settings
+#Encoding Settings
+
+function : HandbrakeAV1
 
 # Video settings
 video:
- -pix_fmt: yuv420p10le
- -c:v: libsvtav1
- -preset: 3
- -svtav1-params: "enable-dlf=1:enable-cdef=1:enable-restoration=1:enable-tpl-la=1:enable-tf=1:tune=1:enable-overlays=1:keyint=-1:fast-decode=1"
+ -e: svt_av1_10bit
+ --encopts: "pix_fmt=yuv420p10le:preset=3:svtav1-params=enable-dlf=1:enable-cdef=1:enable-restoration=1:enable-tpl-la=1:enable-tf=1:tune=1:enable-overlays=1:keyint=-1:fast-decode=1"
+ --hdr-dynamic-metadatadata: all
+
 
 test_settings:
  cq_threashold: 1.02
@@ -15,3 +17,5 @@ test_settings:
   1920: !!float -6.9e-05
   3840: !!float -3e-05
  defalut_cq: 28
+
+ # HandBrakeCLI -i "x.mkv" -o "x.mkv" -e svt_av1_10bit -q 20 --hdr-dynamic-metadata all --crop 0:20:0:20 --width 1920 --height 1040 --encopts "pix_fmt=yuv420p10le:preset=3:svtav1-params=enable-dlf=1:enable-cdef=1:enable-restoration=1:enable-tpl-la=1:enable-tf=1:tune=1:enable-overlays=1:keyint=-1:fast-decode=1"
