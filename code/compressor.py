@@ -188,6 +188,8 @@ def compress_HandbrakeAV1(file, profile, output_file, crop, target_res, target_c
         '--crop', f'0:{str(crop[0])}:0:{str(crop[1])}'
         '--width', str(target_res),
         '--auto-anamorphic',
+        '--all-subtitles', 
+        '--srt-codeset',  'UTF-8'
         ]
 
     if start or duration:
@@ -198,13 +200,25 @@ def compress_HandbrakeAV1(file, profile, output_file, crop, target_res, target_c
         command = command + sub
 
     if channels:
-        #TODO: audio
-        None
+        channels_list = {
+            1: 'mono',
+            2: 'dpl2',
+            6: '5point1',
+            7: '6point1',
+            8: '7point1'
+        }
+        if channels < 6 and channels > 2: channels = 2
+        elif channels > 8: channels = 8
+
+        sub = [
+            '--start-at',  f'duration:{str(start)}',
+            '--stop-at-at',  f'duration:{str(duration)}',
+        ]
+        command = command + sub
     else:
         #TODO: disable audio
         None
 
-    #TODO: subtitles
 
     command = command + profile["video"]
 
