@@ -1,18 +1,19 @@
 #Encoding Settings
 
-function : HandbrakeAV1
+function:
+ -function: HandbrakeAV1
 
 # Video settings
 video:
  -e: svt_av1_10bit
  --encoder-preset: 3
  --encoder-tune: "subjective ssim"
- --encopts: "pix_fmt=yuv420p10le:svtav1-params=enable-dlf=1:enable-cdef=1:enable-restoration=1:enable-tpl-la=1:enable-tf=1:enable-overlays=1:keyint=-1:fast-decode=1"
- --hdr-dynamic-metadatadata: all
+ --encopts: "enable-dlf=1:enable-cdef=1:enable-restoration=1:enable-tpl-la=1:enable-tf=1:enable-overlays=1:keyint=-1:fast-decode=1"
+ --hdr-dynamic-metadata: all
 
 audio:
- -E: "opus"
- --audio-quality: 4
+ --aencoder: "copy:opus"
+ --audio-fallback:  "opus"
 
 
 test_settings:

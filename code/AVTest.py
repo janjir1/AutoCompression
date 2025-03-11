@@ -8,6 +8,8 @@ import numpy as np
 import soundfile as sf
 from PIL import Image
 import logging
+import compressor
+import traceback
 
 #TODO: add cleanup
 
@@ -55,12 +57,12 @@ def getVQA(video_path: str, num_of_runs: int = 4) -> int: #enter full path to vi
     return average_quality
 
 # region getRes_parallel
-def getRes_parallel(workspace: str, orig_video_path : str, h_res_values: list, number_of_scenes:int, decode_table: dict,  video_profile: list, crop: list, scene_length = 1, cq_value = 1, num_of_VQA_runs: int = 2, threads=6, keep_best_slopes=0.6,) -> int: #enter full path to video
+def getRes_parallel(workspace: str, orig_video_path : str, h_res_values: list, number_of_scenes:int, decode_table: dict,  profile: dict, crop: list, scene_length = 1, cq_value = 1, num_of_VQA_runs: int = 2, threads=3, keep_best_slopes=0.6,) -> int: #enter full path to video
 
     name = str(os.path.basename(orig_video_path)[:-4]) + "_res"
     video_folder = os.path.join(workspace, name)
 
-    _prepareRes_test(video_folder, orig_video_path, h_res_values, number_of_scenes, scene_length, cq_value, video_profile, crop)
+    _prepareRes_test(video_folder, orig_video_path, h_res_values, number_of_scenes, scene_length, cq_value, profile, crop)
 
     video_paths = list()
     files = [f for f in os.listdir(video_folder) if os.path.isfile(os.path.join(video_folder, f))]
@@ -144,58 +146,53 @@ def getRes_parallel(workspace: str, orig_video_path : str, h_res_values: list, n
 def _run_VQA_process(video_path, shared_dict, lock):
 
     match = re.search(r'\d*(?=_cq\d.mp4)', video_path)
-    if match:
-        type = match.group()
-    else: type = video_path
-
+    video_id = match.group() if match else video_path
     name = os.path.basename(video_path)[:-4]
 
+    # Build the command for the VQA script
     command = [sys.executable, "./FastVQA-and-FasterVQA/vqa.py", "-v", video_path]
+    logger.info(f"Starting VQA calculation on file {name} (Video ID: {video_id}) with PID {os.getpid()}")
 
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, shell=True)
-    
-    type = str(process.pid)
-    logger.info(f"Calculating VQA on file {name}")
-
-    output_lines = []
     try:
-        for line in process.stdout:
-            output_lines.append(line.strip())
-
-        # Wait for the process to complete and get the exit code
-        process.wait()
-        
-        # Check for errors
-        if process.returncode != 0:
-            logger.error(f"Script exited with error code {process.returncode}")
-            error_output = process.stderr.read()
-            logger.error("Error Output:")
-            logger.error(error_output)
-
+        # Run the command with a timeout of 20 minutes (1200 seconds)
+        result = subprocess.run(command, capture_output=True, text=True, shell=False, timeout=1200)
+    except subprocess.TimeoutExpired:
+        logger.error(f"Timeout expired for file {name} after 20 minutes.")
+        return None
     except Exception as e:
-        logger.error(f"An error occurred: {str(e)}")
+        logger.exception(f"An error occurred while running VQA on {name}: {e}")
+        return None
 
-    #Parse the output
-    for line in output_lines:
+    # Check for errors in the subprocess execution
+    if result.returncode != 0:
+        logger.error(f"Script for {name} exited with error code {result.returncode}")
+        logger.error(f"Error Output: {result.stderr}")
+    else:
+        logger.info(f"VQA process for {name} completed successfully.")
+
+    # Parse the output to extract the VQA score
+    VQA = None
+    for line in result.stdout.splitlines():
         if "The quality score of the video" in line:
-            match = re.search(r'\b0\.\d+', line)
-            if match:
-                VQA = float(match.group())
-                logger.debug("Calculated VQA: {VQA}")
+            score_match = re.search(r'\b0\.\d+', line)
+            if score_match:
+                try:
+                    VQA = float(score_match.group())
+                    logger.debug(f"Calculated VQA for {name}: {VQA}")
+                except ValueError:
+                    logger.error(f"Failed to convert VQA value to float for {name}")
 
-    # Append this process's output to the shared list
+    if VQA is None:
+        logger.warning(f"No VQA score found for {name}")
+
+    # Append the VQA result to the shared dictionary in a thread-safe manner
     with lock:
         if name in shared_dict:
-            local_list = shared_dict[name]  # Get the local copy
+            shared_dict[name].append(VQA)
         else:
-            local_list = []
-        # Update the local copy
-        local_list.append(VQA)
-        # Write back the updated dictionary
-        shared_dict[name] = local_list
+            shared_dict[name] = [VQA]
 
-
-    return process.returncode
+    return result.returncode
 
 def vfCropComandGenerator(file_path: str, crop: list, target_h_res: int) -> str:
     h_res_orig = getH_res(file_path)
@@ -206,7 +203,7 @@ def vfCropComandGenerator(file_path: str, crop: list, target_h_res: int) -> str:
     command = f"crop={h_res_orig}:{target_v_res}:0:{crop[0]},scale={target_h_res}:-2:sws_flags=neighbor"
     return command
 
-def _prepareRes_test(output_folder, file_path, h_res_values, number_of_scenes, scene_length, cq_value, video_profile, crop):
+def _prepareRes_test(output_folder, file_path, h_res_values, number_of_scenes, scene_length, cq_value, profile, crop):
 
     if not os.path.exists(output_folder):
             # Create the directory
@@ -230,40 +227,8 @@ def _prepareRes_test(output_folder, file_path, h_res_values, number_of_scenes, s
                 results[output_name] = dict()
 
                 logger.debug(f"Creating test file {output_name}")
-
-                #add resolution crop filter to alreadz existing filters
-                resolution_filter = vfCropComandGenerator(file_path, crop, h_resolution)
-                video_profile_modified = video_profile.copy()
-                try:
-                    index = video_profile_modified.index("-vf")
-                    video_profile_modified[index+1] = video_profile_modified[index+1] + "," + resolution_filter
-                except ValueError:
-                    video_profile_modified.append("-vf")
-                    video_profile_modified.append(resolution_filter)
-                    #TODO cq for h265 and crf for av1
-                    #TODO -hwaccel for different hw configs
-                    # Define the ffmpeg command as a list of arguments
-                command_append = [
-                    '-t', str(scene_length),                  # Duration
-                    '-crf', str(cq_value),                     # Constant Quality mode
-                    #'-vf', f'scale={str(h_resolution)}:-1',   # Scale video width and maintain aspect ratio                
-                    '-an',                                    # Disable audio
-                    '-y',                                      # overvrite
-                    "-sn",                                      # disable subtitles
-                    output_path                               # Output file
-                ]
-
-                command_prepend =[
-                    "ffmpeg",             # Command to run FFmpeg
-                    "-ss", str(timestep*timestamp),     # Seek to the calculated timestamp
-                    "-hwaccel",  "cuda",
-                    "-i", file_path      # Input file path
-                ]
-
-                command = command_prepend + video_profile_modified + command_append
+                _ = compressor.compress(file_path, profile, output_path,crop, h_resolution, cq_value, False, timestep*timestamp, scene_length)
                 
-
-                testsFFMPEG(command)
 # region tests FFMPEG
 def testsFFMPEG(command) -> None:
 
@@ -388,7 +353,7 @@ def getVMAF(reference_file, distorted_file, threads=8) -> float:
         logger.error(process.stderr)  # Display the error output
 
 # region getCQ
-def getCQ(workspace: str, orig_video_path : str, h_res, cq_values: list, number_of_scenes:int, threashold_variable: float, video_profile: list, crop: list, cq_reference = 1, scene_length = 60, threads=6, keep_best_scenes=0.6) -> float:
+def getCQ(workspace: str, orig_video_path : str, h_res, cq_values: list, number_of_scenes:int, threashold_variable: float, profile: list, crop: list, cq_reference = 1, scene_length = 60, threads=6, keep_best_scenes=0.6) -> float:
     
     if len(cq_values) != 4:
         logger.error("cq values list different size")
@@ -422,7 +387,7 @@ def getCQ(workspace: str, orig_video_path : str, h_res, cq_values: list, number_
 
             logger.debug(f"Creating reference file {output_name}")
          
-            _createAndTestVMAF(output_path, orig_video_path, h_res, cq_reference, timestamp*timestep, scene_length, video_profile, crop, None, threads)
+            _createAndTestVMAF(output_path, orig_video_path, h_res, cq_reference, timestamp*timestep, scene_length, profile, crop, None, threads)
             reference_files.append(output_path)
         reference_files.sort() #this will break with 9 or more scenes
 
@@ -442,13 +407,13 @@ def getCQ(workspace: str, orig_video_path : str, h_res, cq_values: list, number_
 
                 logger.debug(f"Getting VMAF result for: {output_name}")
             
-                results[timestamp][cq_values[position]] = _createAndTestVMAF(output_path, orig_video_path, h_res, cq_values[position], timestamp*timestep, scene_length, video_profile, crop, reference_files[timestamp-1], threads)
+                results[timestamp][cq_values[position]] = _createAndTestVMAF(output_path, orig_video_path, h_res, cq_values[position], timestamp*timestep, scene_length, profile, crop, reference_files[timestamp-1], threads)
 
         #get optimized VMAF value
         output_name = f"1_{cq_values[1]}.mp4"
         output_path = os.path.join(video_folder, output_name)
         logger.debug(f"Getting VMAF result for: {output_name}")
-        optimization_VMAF = _createAndTestVMAF(output_path, orig_video_path, h_res, cq_values[1], 1*timestep, scene_length, video_profile, crop, reference_files[0], threads)
+        optimization_VMAF = _createAndTestVMAF(output_path, orig_video_path, h_res, cq_values[1], 1*timestep, scene_length, profile, crop, reference_files[0], threads)
 
         for key in results.keys():
             results[key]
@@ -496,9 +461,17 @@ def getCQ(workspace: str, orig_video_path : str, h_res, cq_values: list, number_
     #endregion
         return target_cq
 
-def _createAndTestVMAF(output_path: str, orig_video_path : str, h_res, cq_value, start_time, scene_length, video_profile: list, crop: list, reference_video = None, threads = 6):
+def _createAndTestVMAF(output_path: str, orig_video_path : str, h_res, cq_value, start_time, scene_length, profile: dict, crop: list, reference_video = None, threads = 6):
 
-    #add resolution filter to alreadz existing filters
+    _ = compressor.compress(orig_video_path, profile, output_path, crop, h_res, cq_value, False, start_time, scene_length)
+    if reference_video is not None:
+        VMAF_value = getVMAF(reference_video, output_path, threads)
+        logger.debug(VMAF_value)
+        return VMAF_value
+    else:
+        return None
+
+"""    #add resolution filter to alreadz existing filters
     resolution_filter = vfCropComandGenerator(orig_video_path, crop, h_res)
     video_profile_modified = video_profile.copy()
     try:
@@ -528,14 +501,8 @@ def _createAndTestVMAF(output_path: str, orig_video_path : str, h_res, cq_value,
     command = command_prepend + video_profile_modified + command_append
 
 
-    testsFFMPEG(command)
+    testsFFMPEG(command)"""
 
-    if reference_video is not None:
-        VMAF_value = getVMAF(reference_video, output_path, threads)
-        logger.debug(VMAF_value)
-        return VMAF_value
-    else:
-        return None
 
 #region Num of Channels
 def getNumOfChannels(orig_video_path: str, workspace: str, simmilarity_cutoff: float, duration: int)-> int:
@@ -619,10 +586,8 @@ def _extractAudio(orig_video_path: str, work_folder: str, duration: int) -> None
     except Exception as e:
         logger.error(f"An error occurred: {e}")
 
-
-
 #region Blackbars
-def detectBlackbars(orig_video_path: str, workspace: str, frames_to_detect: int) -> list:
+def detectBlackbars(orig_video_path: str, workspace: str, frames_to_detect: int = 10) -> list:
     
     name = str(os.path.basename(orig_video_path)[:-4]) + "_blackDetection"
     work_folder = os.path.join(workspace, name)
@@ -689,6 +654,57 @@ def exportFrame(orig_video_path: str, target_name_path: str, time: int, png_qual
     if process.returncode != 0:
         logger.error(f"FFmpeg finished with errors. Exit code: {process.returncode}")
         logger.error(process.stderr)
+
+def runTests(file: str, workspace: str, profile, settings, threads: int): 
+    try:
+        orig_res = getH_res(file)
+        logger.info(f"Original resolution is {orig_res}")
+    except Exception as e:
+        logger.error("Not able to detect horiontal resolution")
+        logger.debug("Failed due to reason:")
+        logger.debug("".join(traceback.format_exception(type(e), e, e.__traceback__)))
+        return False
+
+    try:
+        crop = detectBlackbars(file, workspace, 10)
+    except Exception as e:
+        logger.warning("Black bar detection failed")
+        logger.debug("Failed due to reason:")
+        logger.debug("".join(traceback.format_exception(type(e), e, e.__traceback__)))
+        crop = [0, 0]
+        logger.info(f"Black bars set as {crop[0]}, {crop[1]}")
+
+    try:
+        target_res = getRes_parallel(workspace, file, [854, 3840], 15, settings["res_decode"], profile, crop, num_of_VQA_runs=3, threads=threads)
+    except Exception as e:
+        logger.warning("Resolution detection failed")
+        logger.debug("Failed due to reason:")
+        logger.debug("".join(traceback.format_exception(type(e), e, e.__traceback__)))
+        logger.info("Keeping original resolution")
+        target_res = orig_res
+        
+
+    try:
+        target_cq = getCQ(workspace, file, target_res, [15, 18, 27, 36], 3, settings["cq_threashold"], profile, crop, scene_length=50, threads=threads)
+        None
+    except Exception as e:
+        logger.warning("CQ test failed")
+        logger.debug("Failed due to reason:")
+        logger.debug("".join(traceback.format_exception(type(e), e, e.__traceback__)))
+        target_cq = settings["defalut_cq"]
+        logger.info(f"Video has calculated CQ of {target_cq}")
+
+    try:
+        channels = getNumOfChannels(file, workspace, 0.001, 1200)
+        None
+    except Exception as e:
+        logger.warning("Unable to get number of audio chanels")
+        logger.debug("Failed due to reason:")
+        logger.debug("".join(traceback.format_exception(type(e), e, e.__traceback__)))
+        channels = 2
+        logger.info(f"Export will have {channels} channels")
+
+    return orig_res, crop, target_res, target_cq, channels
 
 
 
