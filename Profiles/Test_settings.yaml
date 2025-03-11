@@ -1,0 +1,34 @@
+Black_bar_detection:
+  Enabled: true
+  frames_to_detect: 10
+
+Resolution_calculation:
+  Enabled: true
+  testing_resolutions:
+    - 854
+    - 3840
+  num_of_tests: 14 #return to 15
+  scene_length: 1
+  cq_value: 1
+  VQA_per_test: 3
+  keep_best_slopes: 0.6
+  Threads: 3
+
+CQ_calculation:
+  Enabled: true
+  cq_values:
+    - 15
+    - 18
+    - 27
+    - 36
+  number_of_scenes: 2 #return to 3
+  cq_reference: 1
+  scene_length: 50
+  keep_best_scenes: 0.6
+  threads: 6
+  
+
+Channels_calculation:
+  Enabled: true
+  simmilarity_cutoff: 0.001
+  duration: 1200

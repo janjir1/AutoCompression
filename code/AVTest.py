@@ -57,7 +57,7 @@ def getVQA(video_path: str, num_of_runs: int = 4) -> int: #enter full path to vi
     return average_quality
 
 # region getRes_parallel
-def getRes_parallel(workspace: str, orig_video_path : str, h_res_values: list, number_of_scenes:int, decode_table: dict,  profile: dict, crop: list, scene_length = 1, cq_value = 1, num_of_VQA_runs: int = 2, threads=3, keep_best_slopes=0.6,) -> int: #enter full path to video
+def getRes_parallel(workspace: str, orig_video_path : str, decode_table: dict, profile: dict, crop: list, h_res_values: list, number_of_scenes:int = 15, scene_length: int = 1, cq_value: int = 1, num_of_VQA_runs: int = 2, keep_best_slopes:float =0.6, threads: int= 2) -> int: #enter full path to video
 
     name = str(os.path.basename(orig_video_path)[:-4]) + "_res"
     video_folder = os.path.join(workspace, name)
@@ -353,7 +353,7 @@ def getVMAF(reference_file, distorted_file, threads=8) -> float:
         logger.error(process.stderr)  # Display the error output
 
 # region getCQ
-def getCQ(workspace: str, orig_video_path : str, h_res, cq_values: list, number_of_scenes:int, threashold_variable: float, profile: list, crop: list, cq_reference = 1, scene_length = 60, threads=6, keep_best_scenes=0.6) -> float:
+def getCQ(workspace: str, orig_video_path : str, h_res,  profile: list, crop: list, threashold_variable: float, cq_values: list = [15, 18, 27, 36], number_of_scenes:int = 3, cq_reference:int = 1, scene_length:int = 60, keep_best_scenes:float=0.6, threads:int =6) -> float:
     
     if len(cq_values) != 4:
         logger.error("cq values list different size")
@@ -458,8 +458,9 @@ def getCQ(workspace: str, orig_video_path : str, h_res, cq_values: list, number_
 
         target_cq = round(target_cq * 2) / 2
         logger.info(f"Video has calculated CQ of {target_cq}")
-    #endregion
+    
         return target_cq
+#endregion
 
 def _createAndTestVMAF(output_path: str, orig_video_path : str, h_res, cq_value, start_time, scene_length, profile: dict, crop: list, reference_video = None, threads = 6):
 
@@ -471,41 +472,8 @@ def _createAndTestVMAF(output_path: str, orig_video_path : str, h_res, cq_value,
     else:
         return None
 
-"""    #add resolution filter to alreadz existing filters
-    resolution_filter = vfCropComandGenerator(orig_video_path, crop, h_res)
-    video_profile_modified = video_profile.copy()
-    try:
-        index = video_profile_modified.index("-vf")
-        video_profile_modified[index+1] = video_profile_modified[index+1] + "," + resolution_filter
-    except ValueError:
-        video_profile_modified.append("-vf")
-        video_profile_modified.append(resolution_filter)
-
-    command_append = [
-        '-t', str(scene_length),                  # Duration
-        '-crf', str(cq_value),                     # Constant Quality mode
-        #'-vf', f'scale={str(h_resolution)}:-1',   # Scale video width and maintain aspect ratio                
-        '-an',                                    # Disable audio
-        '-y',                                      # overvrite
-        "-sn",                                     # disable subtitles
-        output_path                               # Output file
-    ]
-
-    command_prepend =[
-        "ffmpeg",             # Command to run FFmpeg
-        "-ss", str(start_time),     # Seek to the calculated timestamp
-        "-hwaccel",  "cuda",
-        "-i", orig_video_path      # Input file path
-    ]
-
-    command = command_prepend + video_profile_modified + command_append
-
-
-    testsFFMPEG(command)"""
-
-
 #region Num of Channels
-def getNumOfChannels(orig_video_path: str, workspace: str, simmilarity_cutoff: float, duration: int)-> int:
+def getNumOfChannels(orig_video_path: str, workspace: str, simmilarity_cutoff: float= 0.001, duration: int = 1200)-> int:
 
     name = str(os.path.basename(orig_video_path)[:-4]) + "_channels"
     work_folder = os.path.join(workspace, name)
@@ -655,7 +623,8 @@ def exportFrame(orig_video_path: str, target_name_path: str, time: int, png_qual
         logger.error(f"FFmpeg finished with errors. Exit code: {process.returncode}")
         logger.error(process.stderr)
 
-def runTests(file: str, workspace: str, profile, settings, threads: int): 
+def runTests(file: str, workspace: str, profile, profile_settings, settings): 
+
     try:
         orig_res = getH_res(file)
         logger.info(f"Original resolution is {orig_res}")
@@ -665,44 +634,64 @@ def runTests(file: str, workspace: str, profile, settings, threads: int):
         logger.debug("".join(traceback.format_exception(type(e), e, e.__traceback__)))
         return False
 
-    try:
-        crop = detectBlackbars(file, workspace, 10)
-    except Exception as e:
-        logger.warning("Black bar detection failed")
-        logger.debug("Failed due to reason:")
-        logger.debug("".join(traceback.format_exception(type(e), e, e.__traceback__)))
-        crop = [0, 0]
-        logger.info(f"Black bars set as {crop[0]}, {crop[1]}")
+    if settings["Black_bar_detection"][0]:
+        try:
+            crop = detectBlackbars(file, workspace, *settings["Black_bar_detection"][1])
+        except Exception as e:
+            logger.warning("Black bar detection failed")
+            logger.debug("Failed due to reason:")
+            logger.debug("".join(traceback.format_exception(type(e), e, e.__traceback__)))
+            crop = [0, 0]
+    else:
+            logger.info("Black bar detection disabled")
+            crop = [0, 0]
 
-    try:
-        target_res = getRes_parallel(workspace, file, [854, 3840], 15, settings["res_decode"], profile, crop, num_of_VQA_runs=3, threads=threads)
-    except Exception as e:
-        logger.warning("Resolution detection failed")
-        logger.debug("Failed due to reason:")
-        logger.debug("".join(traceback.format_exception(type(e), e, e.__traceback__)))
-        logger.info("Keeping original resolution")
-        target_res = orig_res
+    logger.info(f"Black bars set as {crop[0]}, {crop[1]}")
+
+    if settings["Resolution_calculation"][0]:
+        try:
+            target_res = getRes_parallel(workspace, file, profile_settings["res_decode"], profile, crop, *settings["Resolution_calculation"][1])
+        except Exception as e:
+            logger.warning("Resolution detection failed")
+            logger.debug("Failed due to reason:")
+            logger.debug("".join(traceback.format_exception(type(e), e, e.__traceback__)))
+            target_res = orig_res
+
+    else:
+        logger.info("Resolution detection disabled")  
+        target_res = orig_res  
+
+    logger.info(f"Target resolution is {target_res}p")  
         
+    if settings["CQ_calculation"][0]:
+        try:
+            target_cq = getCQ(workspace, file, target_res, profile, crop, profile_settings["cq_threashold"], *settings["CQ_calculation"][1])
+        except Exception as e:
+            logger.warning("CQ test failed")
+            logger.debug("Failed due to reason:")
+            logger.debug("".join(traceback.format_exception(type(e), e, e.__traceback__)))
+            target_cq = profile_settings["defalut_cq"]
+            
+    else:
+        logger.info("CQ calculation disabled") 
+        target_cq = profile_settings["defalut_cq"] 
 
-    try:
-        target_cq = getCQ(workspace, file, target_res, [15, 18, 27, 36], 3, settings["cq_threashold"], profile, crop, scene_length=50, threads=threads)
-        None
-    except Exception as e:
-        logger.warning("CQ test failed")
-        logger.debug("Failed due to reason:")
-        logger.debug("".join(traceback.format_exception(type(e), e, e.__traceback__)))
-        target_cq = settings["defalut_cq"]
-        logger.info(f"Video has calculated CQ of {target_cq}")
+    logger.info(f"Video has target CQ of {target_cq}")
 
-    try:
-        channels = getNumOfChannels(file, workspace, 0.001, 1200)
-        None
-    except Exception as e:
-        logger.warning("Unable to get number of audio chanels")
-        logger.debug("Failed due to reason:")
-        logger.debug("".join(traceback.format_exception(type(e), e, e.__traceback__)))
+    if settings["Channels_calculation"][0]:
+        try:
+            channels = getNumOfChannels(file, workspace, *settings["Channels_calculation"][1])
+        except Exception as e:
+            logger.warning("Unable to get number of audio chanels")
+            logger.debug("Failed due to reason:")
+            logger.debug("".join(traceback.format_exception(type(e), e, e.__traceback__)))
+            channels = 2
+
+    else:
+        logger.info("Channels calculation disabled")
         channels = 2
-        logger.info(f"Export will have {channels} channels")
+    
+    logger.info(f"Export will have {channels} channels")
 
     return orig_res, crop, target_res, target_cq, channels
 
