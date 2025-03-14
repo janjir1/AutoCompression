@@ -239,17 +239,6 @@ def _run_VQA_process(video_path: str, shared_dict: dict, lock) -> int:
 
     return result.returncode
 
-"""
-def vfCropComandGenerator(file_path: str, crop: list, target_h_res: int) -> str:
-    h_res_orig = getH_res(file_path)
-    v_res_orig = getV_res(file_path)
-    target_v_res = v_res_orig - crop[0] - crop[1]
-    #-vf "crop=1920:970:0:60,scale=1280:-2"
-    #TODO not constant flag neighbour for res test, lacroz for everything else
-    command = f"crop={h_res_orig}:{target_v_res}:0:{crop[0]},scale={target_h_res}:-2:sws_flags=neighbor"
-    return command
-"""
-
 def _prepareRes_test(
     output_folder: str,
     file_path: str,
@@ -307,22 +296,9 @@ def _prepareRes_test(
             # Perform encoding using the compressor module
             logger.debug(f"Creating test file {output_name}")
             _ = compressor.compress(file_path, profile, output_path,crop, h_resolution, cq_value, False, timestep*timestamp, scene_length)
+#endregion
 
-"""               
-# region tests FFMPEG
-def testsFFMPEG(command) -> None:
-
-    logger.debug(f"ffmpeg command: {command}")
-    # Run the command and wait for it to complete
-    process = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    #process = subprocess.run(command)
-
-    # Check if the process completed successfully
-    if process.returncode != 0:
-        logger.error(f"FFmpeg finished with errors. Exit code: {process.returncode}")
-        logger.error(process.stderr) 
-"""
-
+# region Basic Tests
 def getDuration(input_path: str) -> float:
     """
     Retrieves the duration of a video file using FFprobe.
@@ -457,8 +433,7 @@ def getV_res(video_path: str) -> int:
         logger.error(f"Failed to parse JSON output from FFprobe for {video_path}.")
     except Exception as e:
         logger.error(f"Unexpected error while retrieving resolution for {video_path}: {e}")
-    
-    
+     
 def getVMAF(reference_file: str, distorted_file: str, threads: int = 8) -> float:
     """
     Computes VMAF (Video Multi-Method Assessment Fusion) score between a reference video
@@ -518,7 +493,7 @@ def getVMAF(reference_file: str, distorted_file: str, threads: int = 8) -> float
 
     except Exception as e:
         logger.error(f"Unexpected error while computing VMAF: {e}")
-
+#endregion
 
 # region getCQ
 def getCQ(workspace: str, orig_video_path: str, h_res: int, profile: list, crop: list,
@@ -692,7 +667,6 @@ def _createAndTestVMAF(
         return VMAF_value
     else:
         return None
-
 
 #region Num of Channels
 def getNumOfChannels(
@@ -1023,7 +997,7 @@ def runTests(file: str, workspace: str, profile, profile_settings, settings):
     logger.info(f"Export will have {channels} channels")
 
     return orig_res, crop, target_res, target_cq, channels
-
+#endregion
 
 
 if __name__ == '__main__':

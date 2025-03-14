@@ -2,7 +2,7 @@ import subprocess, os, json
 import logging
 import AVTest
 from threading import Thread
-
+import logger_setup
 # Retrieve the logger once at the module level
 logger = logging.getLogger("AppLogger")
 
@@ -61,7 +61,6 @@ def compress_HEVC(file, profile, output_file, crop, target_res, target_cq, chann
         return False
     
     logger.info(f"Conversion finished succesfully")
-
 
 def get_video_metadata(input_file, workspace, extract_dynamic = False, relative_tools_path = "tools", cleanup = True):
     # Ensure workspace exists
@@ -150,8 +149,27 @@ def get_video_metadata(input_file, workspace, extract_dynamic = False, relative_
 
     return output_metadata, metadata_file
 
-def compress(file, profile, output_file, crop, target_res, target_cq, channels = False, start = False, duration = False, subtitles = False, tool_path = r"tools\HandBrakeCLI.exe") -> bool:
+def compress(file: str, profile, output_file: str, crop: list, target_res: int, target_cq: float, channels: int = False, start: int = False, duration: int = False, subtitles: bool = False, tool_path: str = r"tools\HandBrakeCLI.exe") -> bool:
+    """
+    Compresses a video file using a specified profile and tool.
     
+    Parameters:
+    - file (str): Path to the input video file.
+    - profile: Dictionary or object containing compression settings, including a "function" key.
+    - output_file (str): Path to save the compressed video.
+    - crop (list): List of crop parameters.
+    - target_res (int): Target horizontal resolution.
+    - target_cq (float): Target constant quality (CQ) value.
+    - channels (int, optional): Audio channels to be used; defaults to False if not provided.
+    - start (int, optional): Start time for compression; defaults to False if not provided.
+    - duration (int, optional): Duration for compression; defaults to False if not provided.
+    - subtitles (bool, optional): Whether to include subtitles; defaults to False.
+    - tool_path (str, optional): Path to the compression tool (HandBrakeCLI); defaults to "tools\HandBrakeCLI.exe".
+    
+    Returns:
+    - bool: True if compression succeeded and output file is valid; otherwise, False.
+    """
+
     function_mapping = {
     "HandbrakeAV1": command_HandbrakeAV1
     }
@@ -170,6 +188,17 @@ def compress(file, profile, output_file, crop, target_res, target_cq, channels =
         return False
 
 def execute(command: list) -> bool:
+    """
+    Executes a command using subprocess, processing stdout and stderr streams in separate threads.
+    For each stream, output is logged to a dedicated file logger (only within the log_stream function).
+    
+    Parameters:
+    - command (list): Command and arguments to execute.
+    
+    Returns:
+    - bool: True if process finished successfully (exit code 0), else False.
+    """
+        
     # Start the process with UTF-8 encoding
     process = subprocess.Popen(
         command,
@@ -179,8 +208,15 @@ def execute(command: list) -> bool:
         universal_newlines=False  # Handle decoding manually
     )
 
-    # Function to read a stream line-by-line and log it
-    def log_stream(stream, stream_type):
+    # Create a dedicated file logger for stream logging.
+    stream_logger = logging.getLogger("FileLogger")
+    for _ in range(6):
+        stream_logger.debug(f"----------------------------------------------------------------------------------------------")
+
+    stream_logger.info(f"{command}")
+    # Function to read a stream line-by-line and log it to a file.
+    def log_stream(stream, stream_type, file_log):
+
         last_line = None
         decoder = iter(lambda: stream.read(1), b'')
         line_buffer = bytearray()
@@ -200,7 +236,7 @@ def execute(command: list) -> bool:
                 except UnicodeDecodeError:
                     decoded_line = line_buffer.decode('utf-8', errors='replace').rstrip('\r\n')
                     stripped_line = decoded_line.strip()
-                    logger.warning(f"Encoding issue detected in {stream_type} stream")
+                    file_log.warning(f"Encoding issue detected in {stream_type} stream")
 
                 # Reset buffer after processing line
                 line_buffer = bytearray()
@@ -216,15 +252,15 @@ def execute(command: list) -> bool:
                 # Log and update last line
                 if stream_type == "STDOUT":
                     print(decoded_line)
+                    file_log.debug(f"[{stream_type}] {decoded_line}")
                 elif stream_type == "STDERR":
-                    #logger.debug(f"[{stream_type}] {decoded_line}")
-                    None
+                    file_log.debug(f"[{stream_type}] {decoded_line}")
                     
                 last_line = stripped_line
 
-    # Start threads for both streams
-    stdout_thread = Thread(target=log_stream, args=(process.stdout, "STDOUT"))
-    stderr_thread = Thread(target=log_stream, args=(process.stderr, "STDERR"))
+   # Start threads for stdout and stderr.
+    stdout_thread = Thread(target=log_stream, args=(process.stdout, "STDOUT", stream_logger))
+    stderr_thread = Thread(target=log_stream, args=(process.stderr, "STDERR", stream_logger))
     
     stdout_thread.start()
     stderr_thread.start()
@@ -242,28 +278,60 @@ def execute(command: list) -> bool:
     logger.info(f"Conversion finished succesfully")
     return True
 
-def check_output(file_path: str, size_limit=2048) -> bool:     
+def check_output(file_path: str, size_limit=2048) -> bool:
+    """
+    Checks if the output file exists and meets the minimum size requirement.
+
+    Parameters:
+    - file_path (str): Path to the output file.
+    - size_limit (int, optional): Minimum acceptable file size in bytes. Defaults to 2048 bytes.
+
+    Returns:
+    - bool: True if the file exists and meets the size requirement, False otherwise.
+    """
     try:
-        if os.path.isfile(file_path):  # Ensure it's a file
+        if os.path.isfile(file_path):  # Ensure the path points to a file
             file_size = os.path.getsize(file_path)
+
             if file_size < size_limit:
-                #os.remove(file_path)
-                logger.error("File is too small -> compression failed")
-                #logger.debug(f"Deleted: {file_path} (Size: {file_size} bytes)")
+                logger.error(f"File is too small ({file_size} bytes) -> Compression likely failed.")
                 return False
             else:
-                logger.debug(f"File is larger than {size_limit} bytes: {file_path}")
+                logger.debug(f"File check passed: {file_path} (Size: {file_size} bytes)")
                 return True
         else:
             logger.error(f"File not found: {file_path}")
-            return True
+            return False  # Changed return value from True to False since the file is missing.
+
     except PermissionError:
-        logger.warning(f"Permission denied: {file_path}")
-        return True
+        logger.warning(f"Permission denied: Unable to access {file_path}")
+        return False  # Returning False as permission issues may prevent valid output.
 
+def command_HandbrakeAV1(
+    file: str, profile: dict, output_file: str, crop: list, target_res: list, target_cq: float, 
+    channels: int, start: int, duration: int, subtitles: bool, tool_path: str = r"tools\HandBrakeCLI.exe"
+) -> list:
+    """
+    Generates a HandBrakeCLI command for encoding a video using AV1.
 
-def command_HandbrakeAV1(file, profile, output_file, crop, target_res, target_cq, channels, start, duration, subtitles, tool_path) -> str:
+    Parameters:
+    - file (str): Input video file path.
+    - profile (dict): Encoding profile containing audio and video settings.
+    - output_file (str): Path to save the encoded output.
+    - crop (list): List containing top and bottom crop values [top, bottom].
+    - target_res (int): Target width resolution.
+    - target_cq (float): Target constant quality value for encoding.
+    - channels (int or bool): Number of audio channels, or False to disable audio.
+    - start (int or bool): Start time in seconds, or False to encode from the beginning.
+    - duration (int or bool): Duration in seconds, or False to encode till the end.
+    - subtitles (bool): If True, include all subtitles; otherwise, disable them.
+    - tool_path (str): Path to the HandBrakeCLI executable.
 
+    Returns:
+    - list: The constructed HandBrakeCLI command as a list of arguments.
+    """
+
+    # Base command with input/output settings and basic encoding options
     command = [
         tool_path,
         '-i', file,

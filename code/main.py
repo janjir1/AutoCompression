@@ -3,7 +3,7 @@ from sympy import li
 import yaml
 from AVTest import runTests
 import logging
-from logger_setup import setup_logger
+import logger_setup
 import os, subprocess, traceback
 import json
 import compressor
@@ -110,10 +110,10 @@ def readSettings(yaml_settings):
 
 if __name__ == '__main__':
 
-    file = r"C:\Users\Janjiri\Videos\Dovi.mkv"
+    file = r"C:\Users\janji\Desktop\Done32.mkv"
     profile_path = r"Profiles\AV1_archive_software.yaml"
     settings_path = r"Profiles\Test_settings.yaml"
-    workspace = r"D:\Files\Projects\AutoCompression\workspace\vqa_chat_test3"
+    workspace = r"Workspace\test1"
 
     if not os.path.exists(workspace):
             # Create the directory
@@ -121,21 +121,23 @@ if __name__ == '__main__':
             print(f'Directory "{workspace}" created.')
 
     log_path = os.path.join(workspace, "app.log")
-    logger = setup_logger(log_level=logging.INFO, log_file=log_path)
-    profile, profile_settings = readProfile(profile_path)
-    print(profile_settings)
+    logger = logger_setup.primary_logger(log_level=logging.INFO, log_file=log_path)
+    log_path = os.path.join(workspace, "stream.log")
+    stream_logger = logger_setup.file_logger(log_path, log_level=logging.DEBUG)
+
+    #profile, profile_settings = readProfile(profile_path)
+    #print(profile_settings)
     #passed = compressor.compress(file, profile, 'test.mkv', [20, 20], 720, 32, 2, 5, 5)
 
-    settings = readSettings(r"D:\Files\Projects\AutoCompression\Profiles\Test_settings.yaml")
-    print(settings)
+    #settings = readSettings(r"D:\Files\Projects\AutoCompression\Profiles\Test_settings.yaml")
+    #print(settings)
 
 
     passed = compressAV(file, workspace, profile_path, settings_path)
 
     """TODO:
-        Check if settings file works as expected
+        create ffmpeg encoding pipeline
         Change mp4 to mkv for testing
-        Make more readable compressor log, for now turned off for readability
         Logger doesnt work in multithreading
         Output calculated things and settings to a file
         Include metadata for windows (length, resolution)
