@@ -113,7 +113,7 @@ if __name__ == '__main__':
     file = r"C:\Users\Janjiri\Videos\Dovi.mkv"
     profile_path = r"Profiles\AV1_archive_software.yaml"
     settings_path = r"Profiles\Test_settings.yaml"
-    workspace = r"D:\Files\Projects\AutoCompression\workspace\setings_test"
+    workspace = r"D:\Files\Projects\AutoCompression\workspace\vqa_chat_test3"
 
     if not os.path.exists(workspace):
             # Create the directory
@@ -132,3 +132,13 @@ if __name__ == '__main__':
 
     passed = compressAV(file, workspace, profile_path, settings_path)
 
+    """TODO:
+        Check if settings file works as expected
+        Change mp4 to mkv for testing
+        Make more readable compressor log, for now turned off for readability
+        Logger doesnt work in multithreading
+        Output calculated things and settings to a file
+        Include metadata for windows (length, resolution)
+        delete VMAFlog.json after execution of vmaf
+        fix output size calculation/comparison mesage
+    """

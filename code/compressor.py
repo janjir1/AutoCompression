@@ -170,9 +170,6 @@ def compress(file, profile, output_file, crop, target_res, target_cq, channels =
         return False
 
 def execute(command: list) -> bool:
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-
-def execute(command: list) -> bool:
     # Start the process with UTF-8 encoding
     process = subprocess.Popen(
         command,
@@ -220,7 +217,8 @@ def execute(command: list) -> bool:
                 if stream_type == "STDOUT":
                     print(decoded_line)
                 elif stream_type == "STDERR":
-                    logger.debug(f"[{stream_type}] {decoded_line}")
+                    #logger.debug(f"[{stream_type}] {decoded_line}")
+                    None
                     
                 last_line = stripped_line
 
