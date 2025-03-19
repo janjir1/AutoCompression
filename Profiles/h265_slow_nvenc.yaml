@@ -1,5 +1,10 @@
 # FFmpeg Encoding Settings
+function:
+ -function: ffmpeg
 
+HDR_enable:
+ -HDR_enable: true
+ 
 # Video settings
 video:
  -c:v: hevc_nvenc         # Video codec: NVENC HEVC

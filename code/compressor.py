@@ -6,148 +6,6 @@ import logger_setup
 # Retrieve the logger once at the module level
 logger = logging.getLogger("AppLogger")
 
-def vfCropComandGenerator(file_path: str, crop: list, target_h_res: int) -> str:
-    h_res_orig = AVTest.getH_res(file_path)
-    v_res_orig = AVTest.getV_res(file_path)
-    target_v_res = v_res_orig - crop[0] - crop[1]
-    #-vf "crop=1920:970:0:60,scale=1280:-2"
-    #TODO not constant flag neighbour for res test, lacroz for everything else
-    command = f"crop={h_res_orig}:{target_v_res}:0:{crop[0]},scale={target_h_res}:-2:sws_flags=neighbor"
-    return command
-
-def compress_HEVC(file, profile, output_file, crop, target_res, target_cq, channels) -> bool:
-    resolution_filter = AVTest.vfCropComandGenerator(file, crop, target_res)
-    video_profile_modified = profile["video"].copy()
-
-    #TODO add max thread count and HDR
-
-    try:
-        index = video_profile_modified.index("-vf")
-        video_profile_modified[index+1] = video_profile_modified[index+1] + "," + resolution_filter
-    except ValueError:
-        video_profile_modified.append("-vf")
-        video_profile_modified.append(resolution_filter)
-
-    command_append = [
-        '-cq', str(target_cq),                     # Constant Quality mode                
-        '-y',                                      # overvrite
-        output_file                                # Output file
-    ]
-
-    command_prepend =[
-        "ffmpeg",                                  # Command to run FFmpeg
-        "-i", file                                 # Input file path
-    ]
-
-    if "stereo" in profile and channels == 2:
-        command = command_prepend + video_profile_modified + profile["stereo"] + command_append
-    else:
-        command = command_prepend + video_profile_modified + profile["audio"] + command_append
-
-    logger.debug(f"ffmpeg command: {command}")
-    #process = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    process = subprocess.run(command)
-
-
-    #region Post
-    # Check if the process completed successfully
-    if process.returncode != 0:
-        logger.error(f"FFmpeg finished with errors. Exit code: {process.returncode}")
-        logger.error(process.stderr)
-        return False
-    
-    if not os.path.isfile(output_file):
-        logger.error("output file not found")
-        return False
-    
-    logger.info(f"Conversion finished succesfully")
-
-def get_video_metadata(input_file, workspace, extract_dynamic = False, relative_tools_path = "tools", cleanup = True):
-    # Ensure workspace exists
-    os.makedirs(workspace, exist_ok=True)
-
-    # First command to get general metadata
-    cmd = ["ffprobe", "-v", "error", "-of", "json", "-show_streams", "-show_format", input_file]
-    
-    print("Running command:", " ".join(cmd))
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    
-    # Handle potential empty metadata
-    try:
-        metadata = json.loads(result.stdout) if result.stdout.strip() else {}
-    except json.JSONDecodeError:
-        metadata = {}
-
-    # Find video stream
-    video_stream = next((stream for stream in metadata.get("streams", []) if stream.get("codec_type") == "video"), {})
-
-    # Extract color info
-    color_primaries = video_stream.get("color_primaries", None)
-    color_trc = video_stream.get("color_transfer", None)
-    colorspace = video_stream.get("color_space", None)
-
-    output_metadata = list()
-    if color_primaries is not None: output_metadata += ["color_primaries", color_primaries]
-    if color_trc is not None: output_metadata += ["color_transfer", color_trc]
-    if colorspace is not None: output_metadata += ["color_space", colorspace]
-
-    # Extract dynamic metadata
-    metadata_file = None
-
-    if extract_dynamic:
-        
-        video_stram = os.path.join(workspace, "dynamic_extract.hevc")
-        hevc_command = ["ffmpeg", "-i", input_file, "-map", "0:v:0", "-c", "copy", "-bsf:v", "hevc_mp4toannexb", "-f", "hevc",  video_stram, "-y"]
-        print(hevc_command)
-        result = subprocess.run(hevc_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        print("STDOUT:", result.stdout)
-        print("STDERR:", result.stderr)
-
-        #DOVI
-        dovi_metadata_file = os.path.join(workspace, "dovi_metadata.bin")
-        dovi_tool_path = os.path.join(relative_tools_path, "dovi_tool.exe")
-        dovi = f"{dovi_tool_path} extract-rpu -i {video_stram} -o {dovi_metadata_file}"
-
-        result = subprocess.run(dovi, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        print("STDOUT:", result.stdout)
-        print("STDERR:", result.stderr)
-
-        deleted = delete_small_file(dovi_metadata_file)
-
-        if deleted is None:
-            print("problem")
-            return False
-        elif deleted is True:
-
-            #HDR10+
-            HDR10_metadata_file = os.path.join(workspace, "HDR10_dynamic_metadata.json")
-            HDR10plus_tool_path = os.path.join(relative_tools_path, "hdr10plus_tool.exe")
-            HDR10plus = f"{HDR10plus_tool_path} extract {video_stram} -o {HDR10_metadata_file}"
-
-            result = subprocess.run(HDR10plus, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            print("STDOUT:", result.stdout)
-            print("STDERR:", result.stderr)
-
-            deleted = delete_small_file(HDR10_metadata_file)
-
-            if deleted is False:
-                metadata_file = {"hdr10_plus": HDR10_metadata_file}
-
-        elif deleted is False:
-            metadata_file = {"dolby-vision": dovi_metadata_file}
-
-    if cleanup is True:
-        try:
-            if os.path.isfile(video_stram):  # Ensure it's a file
-                    os.remove(video_stram)
-            else:
-                print(f"File not found: {video_stram}")
-        except PermissionError:
-            print(f"Permission denied: {video_stram}")
-        except Exception as e:
-            print(f"Error deleting file {video_stram}: {e}")
-
-    return output_metadata, metadata_file
 
 def compress(file: str, profile, output_file: str, crop: list, target_res: int, target_cq: float, channels: int = False, start: int = False, duration: int = False, subtitles: bool = False, tool_path: str = r"tools\HandBrakeCLI.exe") -> bool:
     """
@@ -294,7 +152,7 @@ def check_output(file_path: str, size_limit=2048) -> bool:
             file_size = os.path.getsize(file_path)
 
             if file_size < size_limit:
-                logger.error(f"File is too small ({file_size} bytes) -> Compression likely failed.")
+                logger.error(f"File is too small ({file_size} bytes) -> Command likely failed.")
                 return False
             else:
                 logger.debug(f"File check passed: {file_path} (Size: {file_size} bytes)")
@@ -389,3 +247,187 @@ def command_HandbrakeAV1(
     logger.debug(f"ffmpeg command: {command}")
 
     return command
+
+def command_ffmpeg(file, profile, output_file, crop, target_res, target_cq, channels) -> bool:
+
+    def vfCropComandGenerator(file_path: str, crop: list, target_h_res: int) -> str:
+        h_res_orig = AVTest.getH_res(file_path)
+        v_res_orig = AVTest.getV_res(file_path)
+        target_v_res = v_res_orig - crop[0] - crop[1]
+        #-vf "crop=1920:970:0:60,scale=1280:-2"
+        command = f"crop={h_res_orig}:{target_v_res}:0:{crop[0]},scale={target_h_res}:-2:sws_flags=neighbor"
+        return command
+    
+    resolution_filter = vfCropComandGenerator(file, crop, target_res)
+    video_profile_modified = profile["video"].copy()
+
+    #TODO add max thread count and HDR
+
+    try:
+        index = video_profile_modified.index("-vf")
+        video_profile_modified[index+1] = video_profile_modified[index+1] + "," + resolution_filter
+    except ValueError:
+        video_profile_modified.append("-vf")
+        video_profile_modified.append(resolution_filter)
+
+    command_append = [
+        '-cq', str(target_cq),                     # Constant Quality mode                
+        '-y',                                      # overvrite
+        output_file                                # Output file
+    ]
+
+    command_prepend =[
+        "ffmpeg",                                  # Command to run FFmpeg
+        "-i", file                                 # Input file path
+    ]
+
+    if "stereo" in profile and channels == 2:
+        command = command_prepend + video_profile_modified + profile["stereo"] + command_append
+    else:
+        command = command_prepend + video_profile_modified + profile["audio"] + command_append
+
+    logger.debug(f"ffmpeg command: {command}")
+    #process = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    return command
+
+def get_video_metadata(input_file, workspace, extract_dynamic = False, relative_tools_path = "tools", cleanup = True):
+    # Ensure workspace exists
+    os.makedirs(workspace, exist_ok=True)
+
+    # First command to get general metadata
+    cmd = ["ffprobe", "-v", "error", "-of", "json", "-show_streams", "-show_format", input_file]
+    
+    print("Running command:", " ".join(cmd))
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    
+    # Handle potential empty metadata
+    try:
+        metadata = json.loads(result.stdout) if result.stdout.strip() else {}
+    except json.JSONDecodeError:
+        metadata = {}
+
+    # Find video stream
+    video_stream = next((stream for stream in metadata.get("streams", []) if stream.get("codec_type") == "video"), {})
+
+    # Extract color info
+    color_primaries = video_stream.get("color_primaries", None)
+    color_trc = video_stream.get("color_transfer", None)
+    colorspace = video_stream.get("color_space", None)
+
+    output_metadata = list()
+    if color_primaries is not None: output_metadata += ["color_primaries", color_primaries]
+    if color_trc is not None: output_metadata += ["color_transfer", color_trc]
+    if colorspace is not None: output_metadata += ["color_space", colorspace]
+
+    # Extract dynamic metadata
+    metadata_file = None
+
+    if extract_dynamic:
+
+        """ likely not needed (new update of tools)
+        video_stram = os.path.join(workspace, "dynamic_extract.hevc")
+        hevc_command = ["ffmpeg", "-i", input_file, "-map", "0:v:0", "-c", "copy", "-bsf:v", "hevc_mp4toannexb", "-f", "hevc",  video_stram, "-y"]
+        print(hevc_command)
+        result = subprocess.run(hevc_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        print("STDOUT:", result.stdout)
+        print("STDERR:", result.stderr)
+        """
+
+        #DOVI
+        dovi_metadata_file = os.path.join(workspace, "dovi_metadata.bin")
+        dovi_tool_path = os.path.join(relative_tools_path, "dovi_tool.exe")
+        dovi = [f"{dovi_tool_path}", "extract-rpu", "-i", f"{input_file}", "-o", f"{dovi_metadata_file}"]
+
+        if not execute(dovi):
+            return False
+        #result = subprocess.run(dovi, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        #print("STDOUT:", result.stdout)
+        #print("STDERR:", result.stderr)
+
+        if check_output(dovi_metadata_file):
+            logger.info("DoVI metadata file is valid")
+            metadata_file = {"dolby-vision": dovi_metadata_file}
+        else:
+            logger.info("DoVI metadata file is not valid")
+            #HDR10+
+            HDR10_metadata_file = os.path.join(workspace, "HDR10_dynamic_metadata.json")
+            HDR10plus_tool_path = os.path.join(relative_tools_path, "hdr10plus_tool.exe")
+            HDR10plus = [f"{HDR10plus_tool_path}", "extract", f"{input_file}", "-o", f"{HDR10_metadata_file}"]
+
+            if not execute(HDR10plus):
+                return False
+            #result = subprocess.run(HDR10plus, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            #print("STDOUT:", result.stdout)
+            #print("STDERR:", result.stderr)
+
+            if check_output(HDR10_metadata_file):
+                logger.info("DoVI metadata file is valid")
+                metadata_file = {"hdr10_plus": HDR10_metadata_file}
+
+    """
+    if cleanup is True:
+        try:
+            if os.path.isfile(video_stram):  # Ensure it's a file
+                    os.remove(video_stram)
+            else:
+                print(f"File not found: {video_stram}")
+        except PermissionError:
+            print(f"Permission denied: {video_stram}")
+        except Exception as e:
+            print(f"Error deleting file {video_stram}: {e}")
+    """
+
+    return output_metadata, metadata_file
+
+def compress_ffmpeg(file: str, profile: dict, output_file: str, crop: list, target_res: list, target_cq: float, 
+    channels: int, start: int, duration: int, subtitles: bool, HDR_enable: bool, tool_path:str = r"tools\HandBrakeCLI.exe"):
+
+    workspace = os.path.dirname(output_file)
+    file_name = os.path.basename(output_file) #TODO remove the .mkv
+
+
+    if HDR_enable and profile["HDR_enable"][1]: #pass to this function
+        #extract metadata (if wanted) 
+
+        output_metadata, metadata_file = get_video_metadata(file, workspace) #TODO extract metadata only if they arent already there
+
+        if metadata_file is None:
+            logger.warning("HDR dynamic metadata extraction from source was not sucesefull or is not enabled")
+            #output file is without change
+            command = command_ffmpeg(file, profile, output_file, crop, target_res, target_cq, channels, output_metadata, start, duration, subtitles, tool_path) #command_ffmpeg doesnt know output metadata yet
+            execute(command)
+            return check_output(output_file)
+            
+        else:
+            logger.info(f"Dynamic data extraction was succesfull, {metadata_file}")
+            output_file = os.path.join(workspace, file_name + ".hevc")
+            command_ffmpeg(file, profile, output_file, crop, target_res, target_cq, channels, output_metadata, start, duration, subtitles, tool_path) #command_ffmpeg doesnt know output metadata yet
+            execute(command)
+            check_output(output_file)
+
+            #inject metadata
+            output_file_inject = os.path.join(workspace, file_name + "HDR.hevc")
+            if metadata_file.keys()[0] == "hdr10_plus":
+                tool_path = os.path.join(os.path.dirname(tool_path), "hdr10_plus.exe")
+                command = [tool_path, "inject", "-i", output_file, "-j", metadata_file["hdr10_plus"], "-o", output_file_inject]
+            elif metadata_file.keys()[0] == "dolby-vision":
+                dovi_tool_path = os.path.join(os.path.dirname(tool_path), "dovi_tool.exe")
+                command = [dovi_tool_path, "inject-rpu", "-i", output_file, "--rpu-in", metadata_file["dolby-vision"], "-o", output_file_inject]
+            else:
+                logger.error("unexpected metadata format (should not be possible)")
+                return False
+            
+            execute(command)
+            check_output(output_file)
+            #TODO: delete non_hdr file
+
+            #TODO: audio
+            # mux back into desired format
+            command = ["ffmpeg", "-i", output_file_inject, "-i", audio.aac, "-c", "copy", output.mkv]
+            execute(command)
+            return check_output(output_file)
+
+    else:
+        command = command_ffmpeg(file, profile, output_file, crop, target_res, target_cq, channels, output_metadata) #command_ffmpeg doesnt know output metadata yet
+        execute(command)
+        return check_output(output_file)   

@@ -1,5 +1,5 @@
 Black_bar_detection:
-  Enabled: true
+  Enabled: false
   frames_to_detect: 10
 
 Resolution_calculation:
@@ -15,7 +15,7 @@ Resolution_calculation:
   Threads: 3
 
 CQ_calculation:
-  Enabled: true
+  Enabled: false
   cq_values:
     - 15
     - 18
@@ -29,6 +29,6 @@ CQ_calculation:
   
 
 Channels_calculation:
-  Enabled: true
+  Enabled: false
   simmilarity_cutoff: 0.001
   duration: 1200
