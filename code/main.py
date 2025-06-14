@@ -143,4 +143,5 @@ if __name__ == '__main__':
         Include metadata for windows (length, resolution)
         delete VMAFlog.json after execution of vmaf
         fix output size calculation/comparison mesage
+        Documentation - doxygen
     """

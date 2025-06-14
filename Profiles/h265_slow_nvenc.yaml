@@ -2,6 +2,7 @@
 function:
  -function: ffmpeg
 
+#Enable HDR only for h265 (HEVC)
 HDR_enable:
  -HDR_enable: true
  
