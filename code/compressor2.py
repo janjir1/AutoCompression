@@ -6,12 +6,15 @@ import logger_setup
 # Retrieve the logger once at the module level
 logger = logging.getLogger("AppLogger")
 
-#temporary fix probalbly forever
-_dynamic_metadata_type = "uninit"
-framerate
+# Global variables for dynamic metadata handling and framerate caching
+# These are used to avoid redundant operations across multiple function calls
+_dynamic_metadata_type = "uninit"  # Tracks HDR metadata type: "DoVi", "HDR10", or False
+framerate = "uninit"  # Cached framerate value to avoid repeated ffprobe calls
 
 
-def compress(file: str, profile, output_file: str, crop: list, target_res: int, target_cq: float, channels: int = False, start: int = False, duration: int = False, subtitles: bool = False, tool_path: str = r"tools\HandBrakeCLI.exe") -> bool:
+def compress(file: str, profile, output_file_name: str, workspace:str, crop: list, target_res: int, target_cq: float,
+             channels: int = False, start: int = False, duration: int = False, subtitles: bool = False,
+             tool_path: str = r"tools\HandBrakeCLI.exe") -> bool:
     """
     Compresses a video file using a specified profile and tool.
     
@@ -32,16 +35,45 @@ def compress(file: str, profile, output_file: str, crop: list, target_res: int, 
     - bool: True if compression succeeded and output file is valid; otherwise, False.
     """
 
+    logger.info(f"Starting compression for file: {file}")
+    logger.debug(f"Compression parameters - Profile: {profile.get('function', 'Unknown')}, "
+                f"Target resolution: {target_res}, CQ: {target_cq}, Crop: {crop}")
+    
+    if start is not False or duration is not False:
+        time_crop_name = os.path.join(workspace, output_file_name + "_time_crop.mkv")
+        logger.debug(f"Performing temporal crop to: {time_crop_name}")
+        
+        if not temporal_crop(file, time_crop_name, start, duration):
+            logger.error("Temporal cropping failed, aborting compression")
+            return False
+        
+        # Use the temporally cropped file as input for main compression
+        file = time_crop_name
+
     function_mapping = {
-    "HandbrakeAV1": video_HandbrakeAV1
+    "HandbrakeAV1": video_HandbrakeAV1,
+    "ffmpeg"      : video_ffmpeg
     }
 
-    if profile["function"][1] in function_mapping:
-        passed = function_mapping[profile["function"][1]](file, profile, output_file, crop, target_res, target_cq, channels, start, duration, subtitles, tool_path)
-    else:
-        logger.error(f"{profile["function"][1]} was not found in function map")
-
+    # Validate that the requested compression function exists
+    if profile["function"][1] not in function_mapping:
+        logger.error(f"Compression function '{profile['function'][1]}' not found in function mapping")
+        return False
     
+    # Execute the appropriate compression function
+    compression_func = function_mapping[profile["function"][1]]
+    logger.info(f"Using compression function: {profile['function'][1]}")
+    
+    success = compression_func(file, profile, output_file_name, workspace, crop, 
+                            target_res, target_cq, channels, start, duration, 
+                            subtitles, tool_path)
+
+    if success:
+        logger.info(f"Compression completed successfully for: {output_file_name}")
+    else:
+        logger.error(f"Compression failed for: {output_file_name}")
+        
+    return success
 
 def execute(command: list) -> bool:
     """
@@ -145,6 +177,9 @@ def check_output(file_path: str, size_limit=2048) -> bool:
     Returns:
     - bool: True if the file exists and meets the size requirement, False otherwise.
     """
+
+    logger.debug(f"Validating output file: {file_path}")
+
     try:
         if os.path.isfile(file_path):  # Ensure the path points to a file
             file_size = os.path.getsize(file_path)
@@ -164,7 +199,31 @@ def check_output(file_path: str, size_limit=2048) -> bool:
         return False  # Returning False as permission issues may prevent valid output.
     
 def temporal_crop(file: str, output_file: str, start: int, duration: int, tool_path: str = r"ffmpeg") -> bool:
+
+    """
+    Performs temporal cropping (time-based cutting) of video files using FFmpeg.
+    
+    This function extracts a specific time segment from a video file without
+    re-encoding, using stream copying for maximum speed and quality preservation.
+    
+    Parameters:
+        file (str): Path to input video file
+        output_file (str): Path for the cropped output file
+        start (int): Start time in seconds for the crop
+        duration (int): Duration in seconds of the cropped segment
+        tool_path (str, optional): Path to FFmpeg executable
         
+    Returns:
+        bool: True if temporal cropping succeeded, False otherwise
+        
+    Note:
+        Uses stream copying (-c:v copy -c:a copy) to avoid quality loss
+        and significantly reduce processing time compared to re-encoding.
+    """
+
+    logger.info(f"Starting temporal crop: {file} -> {output_file}")
+    logger.debug(f"Crop parameters - Start: {start}s, Duration: {duration}s")
+  
     command =[
     tool_path,
     "-y",
@@ -188,25 +247,35 @@ def temporal_crop(file: str, output_file: str, start: int, duration: int, tool_p
         return False
 
 def video_HandbrakeAV1(
-    file: str, profile: dict, output_file: str, crop: list, target_res: list, target_cq: float, 
+    file: str, profile: dict, output_file_name: str, workspace: str, crop: list, target_res: list, target_cq: float, 
     tool_path: str = r"tools\HandBrakeCLI.exe") -> bool:
     """
-    Generates a HandBrakeCLI command for encoding a video using AV1.
-
+    Encodes video using HandBrakeCLI with AV1 codec and specified quality settings.
+    
+    This function constructs and executes HandBrakeCLI commands for AV1 encoding
+    with cropping, resolution scaling, and quality control parameters.
+    
     Parameters:
-    - file (str): Input video file path.
-    - profile (dict): Encoding profile containing audio and video settings.
-    - output_file (str): Path to save the encoded output.
-    - crop (list): List containing top and bottom crop values [top, bottom].
-    - target_res (int): Target width resolution.
-    - target_cq (float): Target constant quality value for encoding.
-    - start (int or bool): Start time in seconds, or False to encode from the beginning.
-    - duration (int or bool): Duration in seconds, or False to encode till the end.
-    - tool_path (str): Path to the HandBrakeCLI executable.
-
+        file (str): Input video file path
+        profile (dict): Encoding profile containing video/audio settings
+        output_file_name (str): Name for output file
+        workspace (str): Directory for output file
+        crop (list): Crop values [top, bottom] in pixels
+        target_res (int): Target width resolution
+        target_cq (float): Constant quality value (lower = higher quality)
+        channels (int, optional): Audio channel configuration
+        start (int, optional): Start time for encoding
+        duration (int, optional): Duration for encoding
+        subtitles (bool, optional): Include subtitle streams
+        tool_path (str, optional): Path to HandBrakeCLI executable
+        
     Returns:
-    - list: The constructed HandBrakeCLI command as a list of arguments.
+        bool: True if encoding succeeded and output is valid, False otherwise
     """
+ 
+    output_file = os.path.join(workspace, output_file_name)
+    logger.info(f"Starting HandBrake AV1 encoding: {file} -> {output_file}")
+    logger.debug(f"Encoding parameters - Resolution: {target_res}, CQ: {target_cq}, Crop: {crop}")
 
     # Base command with input/output settings and basic encoding options
     command = [
@@ -221,12 +290,14 @@ def video_HandbrakeAV1(
         '-s', 'none'
         ]
 
+    # Append video-specific profile settings
     command = command + profile["video"]
 
     logger.debug(f"HandbrakeAV1 command: {command}")
 
     if execute(command):
         if check_output(output_file):
+            logger.info(f"HandBrake AV1 encoding completed successfully: {output_file}")
             return True
         else:
             return False
@@ -234,22 +305,73 @@ def video_HandbrakeAV1(
         return False
     
 def video_ffmpeg(
-    file: str, profile: dict, output_file: str, crop: list, target_res: list, target_cq: float, 
-    start: int, duration: int, tool_path: str = r"tools\HandBrakeCLI.exe") -> bool:
+    input_file: str, profile: dict, name: str, workspace: str, crop: list, target_res: list, target_cq: float) -> bool:
 
-    def get_video_metadata_type(input_file, workspace, relative_tools_path = "tools"):
+    """
+    Main FFmpeg-based video encoding function with HDR metadata handling.
+    
+    This function orchestrates the complete FFmpeg encoding workflow including
+    HDR metadata detection, extraction, encoding, and re-injection for formats
+    like Dolby Vision and HDR10+.
+    
+    Parameters:
+        input_file (str): Path to input video file
+        profile (dict): Encoding profile with video settings and HDR options
+        name (str): Base name for output files
+        workspace (str): Working directory for temporary and output files
+        crop (list): Crop parameters [top, bottom]
+        target_res (int): Target horizontal resolution
+        target_cq (float): Constant quality value
+        
+    Returns:
+        bool: True if encoding completed successfully, False otherwise
+    """
+
+    logger.info(f"Starting FFmpeg encoding workflow: {input_file}")
+
+    def get_video_metadata_type(input_file, dovi_metadata_file, HDR10_metadata_file, relative_tools_path = "tools"):
+
+        """
+        Detects and caches the HDR metadata type present in a video file.
+        
+        This function performs a sequential check for Dolby Vision (DoVi) and HDR10+ metadata
+        by attempting to extract metadata using specialized tools. The detected metadata type
+        is cached globally to avoid redundant detection operations.
+        
+        Parameters:
+            input_file (str): Path to the input video file to analyze
+            dovi_metadata_file (str): Output path for extracted Dolby Vision metadata
+            HDR10_metadata_file (str): Output path for extracted HDR10+ metadata
+            relative_tools_path (str, optional): Directory containing extraction tools
+            
+        Returns:
+            bool: True if metadata type was successfully detected or already cached,
+                False if no supported HDR metadata was found
+                
+        Side Effects:
+            Sets global _dynamic_metadata_type to "DoVi", "HDR10", or False
+            
+        Note:
+            This function uses a global cache to avoid repeated metadata detection.
+            DoVi detection takes priority over HDR10+ detection.
+        """
 
         global _dynamic_metadata_type
 
+        logger.info(f"Starting HDR metadata type detection for: {input_file}")
+        logger.debug(f"Output paths - DoVi: {dovi_metadata_file}, HDR10+: {HDR10_metadata_file}")
+
         if _dynamic_metadata_type is "uninit":
 
+            logger.debug("Metadata type not cached, performing detection")
             _dynamic_metadata_type = False
-            dovi_metadata_file = os.path.join(workspace, "dovi_metadata.bin")
-            HDR10_metadata_file = os.path.join(workspace, "HDR10_dynamic_metadata.json")
 
-            #DOVI
+            logger.info("Attempting Dolby Vision metadata extraction")
             dovi_tool_path = os.path.join(relative_tools_path, "dovi_tool.exe")
             dovi = [f"{dovi_tool_path}", "extract-rpu", "-i", f"{input_file}", "-o", f"{dovi_metadata_file}"]
+
+            logger.debug(f"Using DoVi tool path: {dovi_tool_path}")
+            logger.debug(f"DoVi extraction command: {' '.join(dovi)}")
 
             if not execute(dovi):
                 return False
@@ -258,12 +380,17 @@ def video_ffmpeg(
                 logger.info("DoVI metadata file is valid")
                 _dynamic_metadata_type = "DoVi"
                 return True
+            
             else:
-                logger.info("DoVI metadata file is not valid")
+
+                logger.info("Dolby Vision not detected, attempting HDR10+ metadata extraction")
 
                 #HDR10+
                 HDR10plus_tool_path = os.path.join(relative_tools_path, "hdr10plus_tool.exe")
                 HDR10plus = [f"{HDR10plus_tool_path}", "extract", f"{input_file}", "-o", f"{HDR10_metadata_file}"]
+
+                logger.debug(f"Using HDR10+ tool path: {HDR10plus_tool_path}")
+                logger.debug(f"HDR10+ extraction command: {' '.join(HDR10plus)}")
 
                 if not execute(HDR10plus):
                     return False
@@ -276,55 +403,166 @@ def video_ffmpeg(
                     logger.info("HDR10+ metadata file is not valid")
                     return False
                     
-        else: return True
+        else: # Metadata type has been previously cached
+            logger.debug(f"Using cached metadata type: {_dynamic_metadata_type}")
+            logger.info("HDR metadata type already determined from previous detection")
+            return True
 
-    def video_HDR_extract(input_file, workspace, name, relative_tools_path = "tools"):
+    def video_HDR_extract(input_file, dovi_metadata_file, HDR10_metadata_file, relative_tools_path = "tools"):
+        """
+        Extracts HDR metadata from video files based on the previously detected metadata type.
+        
+        This function performs the actual extraction of HDR metadata after the type has been
+        determined by get_video_metadata_type(). It handles both Dolby Vision RPU extraction
+        and HDR10+ dynamic metadata extraction using specialized tools.
+        
+        Parameters:
+            input_file (str): Path to the input video file containing HDR metadata
+            dovi_metadata_file (str): Output path for extracted Dolby Vision metadata
+            HDR10_metadata_file (str): Output path for extracted HDR10+ metadata
+            relative_tools_path (str, optional): Directory containing extraction tools
+            
+        Returns:
+            str | bool: Path to the extracted metadata file if successful,
+                    False if extraction failed or unsupported metadata type
+                    
+        Note:
+            This function relies on the global _dynamic_metadata_type variable being
+            set by a previous call to get_video_metadata_type().
+        """
+
         #TODO spetial crop for dovi
         global _dynamic_metadata_type
-        dovi_metadata_file = os.path.join(workspace, "dovi_metadata_" + name + ".bin")
-        HDR10_metadata_file = os.path.join(workspace, "HDR10_dynamic_metadata_" + name + ".json")
+
+        logger.info(f"Starting HDR metadata extraction for: {input_file}")
+        logger.debug(f"Metadata type: {_dynamic_metadata_type}")
+        logger.debug(f"Output paths - DoVi: {dovi_metadata_file}, HDR10+: {HDR10_metadata_file}")
 
         if _dynamic_metadata_type == "DoVi":
 
+            logger.info("Extracting Dolby Vision RPU metadata")
             dovi_tool_path = os.path.join(relative_tools_path, "dovi_tool.exe")
             dovi = [f"{dovi_tool_path}", "extract-rpu", "-i", f"{input_file}", "-o", f"{dovi_metadata_file}"]
+
+            logger.debug(f"Using DoVi tool path: {dovi_tool_path}")
+            logger.debug(f"DoVi extraction command: {' '.join(dovi)}")
 
             if not execute(dovi):
                 return False
             if not check_output(dovi_metadata_file):
                 return False
-            return dovi_metadata_file
+            return True
         
         elif _dynamic_metadata_type == "HDR10":
 
+            logger.info("Extracting HDR10+ dynamic metadata")
+
             HDR10plus_tool_path = os.path.join(relative_tools_path, "hdr10plus_tool.exe")
             HDR10plus = [f"{HDR10plus_tool_path}", "extract", f"{input_file}", "-o", f"{HDR10_metadata_file}"]
+
+            logger.debug(f"Using HDR10+ tool path: {HDR10plus_tool_path}")
+            logger.debug(f"HDR10+ extraction command: {' '.join(HDR10plus)}")
 
             if not execute(HDR10plus):
                 return False
             if not check_output(HDR10_metadata_file):
                 return False
-            return dovi_metadata_file
+            return True
         
-        else: return False
-
-    def video_HDR_inject(input_file, workspace, metadata_file, output_file, relative_tools_path = "tools"):
-
-        global _dynamic_metadata_type
-        logger.info(f"Injecting {metadata_file} metadata into {output_file}")
-        
-        if _dynamic_metadata_type == "HDR10":
-            tool_path = os.path.join(os.path.dirname(tool_path), "hdr10_plus.exe")
-            command = [tool_path, "inject", "-i", output_file, "-j", metadata_file, "-o", output_file]
-        elif _dynamic_metadata_type == "DoVi":
-            dovi_tool_path = os.path.join(os.path.dirname(tool_path), "dovi_tool.exe")
-            command = [dovi_tool_path, "inject-rpu", "-i", output_file, "--rpu-in", metadata_file, "-o", output_file]
-        else:
-            logger.error("unexpected metadata format")
+        else: 
+            logger.error(f"Unsupported or uninitialized metadata type: {_dynamic_metadata_type}")
+            logger.error("Ensure get_video_metadata_type() was called successfully before extraction")
             return False
         
+    def video_HDR_inject(input_file, metadata_file, output_file, relative_tools_path = "tools"):
+        """
+        Injects HDR metadata into encoded video files based on the detected metadata type.
+        
+        This function takes an encoded video file and re-injects the previously extracted
+        HDR metadata (either Dolby Vision RPU or HDR10+ dynamic metadata) to create
+        the final HDR-capable output file.
+        
+        Parameters:
+            input_file (str): Path to the encoded video file (usually HEVC format)
+            metadata_file (str): Path to the extracted metadata file to inject
+            output_file (str): Path for the output file with injected metadata
+            relative_tools_path (str, optional): Directory containing injection tools
+            
+        Returns:
+            bool: True if metadata injection succeeded and output is valid,
+                False if injection failed or unsupported metadata type
+                
+        Note:
+            This function relies on the global _dynamic_metadata_type variable being
+            set by a previous call to get_video_metadata_type().
+        """
+            
+        global _dynamic_metadata_type
+
+        logger.info(f"Starting HDR metadata injection for: {input_file}")
+        logger.info(f"Injecting {metadata_file} metadata into {output_file}")
+        logger.debug(f"Metadata type: {_dynamic_metadata_type}")
+        logger.debug(f"Tools path: {relative_tools_path}")
+        
+        if _dynamic_metadata_type == "HDR10":
+            logger.info("Injecting HDR10+ dynamic metadata")
+            HDR10plus_tool_path = os.path.join(relative_tools_path, "hdr10plus_tool.exe")
+            command = [HDR10plus_tool_path, "inject", "-i", input_file, "-j", metadata_file, "-o", output_file]
+            logger.debug(f"Using HDR10+ tool path: {HDR10plus_tool_path}")
+            logger.debug(f"HDR10+ injection command: {' '.join(command)}")
+
+        elif _dynamic_metadata_type == "DoVi":
+            logger.info("Injecting Dolby Vision RPU metadata")
+            dovi_tool_path = os.path.join(relative_tools_path, "dovi_tool.exe")
+            command = [dovi_tool_path, "inject-rpu", "-i", input_file, "--rpu-in", metadata_file, "-o", output_file]
+
+            logger.debug(f"Using DoVi tool path: {dovi_tool_path}")
+            logger.debug(f"DoVi injection command: {' '.join(command)}")
+        else:
+            logger.error(f"Unsupported metadata format: {_dynamic_metadata_type}")
+            logger.error("Supported formats are 'HDR10' and 'DoVi' only")
+            logger.error("Ensure get_video_metadata_type() was called successfully before injection")
+            return False
+        
+        if not execute(command):
+                return False
+        if not check_output(output_file):
+            return False
+        return False
+             
     def video_encode_ffmpeg(input_file: str, profile: dict, output_file: str, crop: list, target_res: list, target_cq: float, 
-    tool_path: str = r"tools\HandBrakeCLI.exe") -> bool:
+    tool_path: str = r"ffmpeg") -> bool:
+        
+        """
+        Encodes video files using FFmpeg with cropping, scaling, and quality control.
+        
+        This function performs video encoding using FFmpeg with support for cropping,
+        resolution scaling, and constant quality encoding. It handles video filter
+        chain construction and integrates with profile-based encoding settings.
+        
+        Parameters:
+            input_file (str): Path to the input video file
+            profile (dict): Encoding profile containing video settings under "video" key
+            output_file (str): Path for the encoded output file
+            crop (list): Crop parameters [top, bottom] in pixels
+            target_res (int): Target horizontal resolution (width) in pixels
+            target_cq (float): Constant quality value (lower = higher quality)
+            tool_path (str, optional): Path to FFmpeg executable
+            
+        Returns:
+            bool: True if encoding succeeded and output is valid, False otherwise
+            
+        Note:
+            The function strips audio (-an) and subtitle (-sn) streams, focusing on
+            video-only encoding for HDR workflows.
+            
+        Raises:
+            ValueError: If crop parameters result in invalid dimensions
+            FileNotFoundError: If FFmpeg executable is not found
+        """
+
+        logger.info(f"Starting FFmpeg video encoding: {input_file} -> {output_file}")
+        logger.debug(f"Encoding parameters - Target resolution: {target_res}, CQ: {target_cq}, Crop: {crop}")
         
         def vfCropComandGenerator(file_path: str, crop: list, target_h_res: int) -> str:
             h_res_orig = AVTest.getH_res(file_path)
@@ -365,8 +603,8 @@ def video_ffmpeg(
         command = command + command_append
 
 
-        logger.debug(f"ffmpeg command: {command}")
-
+        logger.debug(f"Complete FFmpeg command: {' '.join(command)}")
+        logger.info("Starting FFmpeg encoding process")
         if execute(command):
             if check_output(output_file):
                 return True
@@ -378,47 +616,52 @@ def video_ffmpeg(
         #Enable HDR only for h265
     
     def get_framerate(input_file):
-        #TODO run only once
-        try:
-            # First attempt: Get r_frame_rate (most reliable for CFR content)
-            cmd = [
-                'ffprobe', '-v', 'error', '-select_streams', 'v:0',
-                '-show_entries', 'stream=r_frame_rate',
-                '-of', 'default=noprint_wrappers=1:nokey=1',
-                input_file
-            ]
-            
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            framerate = result.stdout.strip()
-            
-            # Validate framerate
-            if framerate and framerate != "0/0" and "/" in framerate:
-                # Convert to decimal to verify it's reasonable
-                numerator, denominator = map(int, framerate.split('/'))
-                fps_decimal = numerator / denominator
-                if 10 <= fps_decimal <= 120:  # Reasonable framerate range
-                    return framerate
-            
-            # Fallback: Try avg_frame_rate for VFR content
-            cmd[4] = 'stream=avg_frame_rate'
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            framerate = result.stdout.strip()
-            
-            if framerate and framerate != "0/0" and "/" in framerate:
-                numerator, denominator = map(int, framerate.split('/'))
-                fps_decimal = numerator / denominator
-                if 10 <= fps_decimal <= 120:
-                    return framerate
-            
-            return False
-            
-        except subprocess.CalledProcessError as e:
-            raise ValueError(f"ffprobe failed to analyze MKV file: {e}")
-        except Exception as e:
-            raise ValueError(f"Error extracting framerate: {e}")
+        """
+        Retrieves the video framerate using ffprobe, supporting both CFR and VFR.
+        
+        Returns:
+            True if succefull
+        
+        Raises:
+            ValueError: On ffprobe failure or invalid framerate.
+        """
 
-    def hevc_to_mkv(input_file, workspace, output_file, framerate):
+        global framerate
+        if framerate == "uninit":
+            logger.info(f"Getting framerate")
+            def probe(entry: str) -> str:
+                cmd = [
+                    "ffprobe", "-v", "error",
+                    "-select_streams", "v:0",
+                    f"-show_entries", f"stream={entry}",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    input_file
+                ]
+                logger.debug(f"Complete FFmpeg command: {' '.join(cmd)}")
+                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                return result.stdout.strip()
+
+
+            # Try constant-frame-rate
+            raw = probe("r_frame_rate")
+            logger.debug(f"Probe r_frame_rate: {raw}")  # Logging probe output[2]
+            if 10 <= float(raw) <= 120:
+                framerate = raw
+                return True
+
+            # Fallback to variable-frame-rate
+            raw = probe("avg_frame_rate")
+            logger.debug(f"Probe avg_frame_rate: {raw}")  # Fallback probe logging[2]
+            if 10 <= float(raw) <= 120:
+                framerate = raw
+                return True
             
+            logger.error(f"Framerate detection failed")
+            return False
+                
+
+    def hevc_to_mkv(input_file, output_file):
+        logger.info(f"Converting .hevc to .mkv")
         command = [
             'ffmpeg', '-y',  # Overwrite output file
             '-fflags', '+genpts',  # Generate presentation timestamps
@@ -427,7 +670,8 @@ def video_ffmpeg(
             '-c:v', 'copy',        # Copy video stream without re-encoding
             output_file
         ]
-        
+
+        logger.debug(f"Complete FFmpeg command: {' '.join(command)}")
         if execute(command):
             if check_output(output_file):
                 return True
@@ -436,16 +680,61 @@ def video_ffmpeg(
         else:
             return False
                 
-
     if profile["HDR_enable"][1]:
 
-        #get_video_metadata_type
-        #get_framerate
-        #video_HDR_extract
-        #video_encode_ffmpeg
-        #video_HDR_inject
-        #hevc_to_mkv
+        logger.info("HDR processing enabled - starting metadata workflow")
+
+        # Define paths for metadata files
+        dovi_metadata_file = os.path.join(workspace, "dovi_metadata_test.bin")
+        HDR10_metadata_file = os.path.join(workspace, "HDR10_metadata_test.json")
+
+        # Detect and cache HDR metadata type
+        if not get_video_metadata_type(input_file, dovi_metadata_file, HDR10_metadata_file):
+            logger.error("HDR metadata type detection failed")
+            return False
+        
+        # Cache framerate information for later use
+        if not get_framerate(input_file):
+            logger.error("Framerate detection failed")
+            return False
+
+        # Set up working file paths for HDR workflow
+        dovi_metadata_file = os.path.join(workspace, name + "dovi_metadata.bin")
+        HDR10_metadata_file = os.path.join(workspace, name + "HDR10_metadata.json")
+
+        # Extract HDR metadata from source file
+        if not video_HDR_extract(input_file, dovi_metadata_file, HDR10_metadata_file):
+            logger.error("HDR metadata extraction failed")
+            return False
+        
+        # Encode video to HEVC format
+        ffmpeg_encode_name = os.path.join(workspace, name + "_reencode.hevc")
+        if not video_encode_ffmpeg(input_file, profile, ffmpeg_encode_name, crop, target_res, target_cq):
+            logger.error("FFmpeg encoding failed")
+            return False
+
+        HDR_inject_name = name + "_HDR_inject.hevc"
+        if _dynamic_metadata_type == "HDR10": metadata_name = HDR10_metadata_file
+        elif _dynamic_metadata_type == "DoVi": metadata_name = dovi_metadata_file
+        else: return False
+        if not video_HDR_inject(ffmpeg_encode_name, metadata_name, HDR_inject_name):
+            logger.error("HDR metadata injection failed")
+            return False
+
+        # Convert final HEVC to MKV container
+        final_name = os.path.join(workspace, name + ".mkv")
+        if not hevc_to_mkv(HDR_inject_name, final_name):
+            logger.error("HEVC to MKV conversion failed")
+            return False
 
     else:
-        
-        #video_encode_ffmpeg
+
+        # Standard encoding without HDR processing
+        logger.info("Standard encoding mode (no HDR processing)")
+        final_name = os.path.join(workspace, name + ".mkv")
+        if not video_encode_ffmpeg(input_file, profile, final_name, crop, target_res, target_cq):
+            logger.error("Standard FFmpeg encoding failed")
+            return False
+    
+    logger.info(f"FFmpeg encoding workflow completed successfully: {final_name}")
+    return True
