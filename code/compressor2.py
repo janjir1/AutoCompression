@@ -3,6 +3,8 @@ import logging
 import AVTest
 from threading import Thread
 import logger_setup
+from main import readProfile
+from fractions import Fraction
 # Retrieve the logger once at the module level
 logger = logging.getLogger("AppLogger")
 
@@ -29,7 +31,7 @@ def compress(file: str, profile, output_file_name: str, workspace:str, crop: lis
     - start (int, optional): Start time for compression; defaults to False if not provided.
     - duration (int, optional): Duration for compression; defaults to False if not provided.
     - subtitles (bool, optional): Whether to include subtitles; defaults to False.
-    - tool_path (str, optional): Path to the compression tool (HandBrakeCLI); defaults to "tools\HandBrakeCLI.exe".
+    - tool_path (str, optional): Path to the compression tool (HandBrakeCLI); defaults to tools\HandBrakeCLI.exe.
     
     Returns:
     - bool: True if compression succeeded and output file is valid; otherwise, False.
@@ -38,6 +40,11 @@ def compress(file: str, profile, output_file_name: str, workspace:str, crop: lis
     logger.info(f"Starting compression for file: {file}")
     logger.debug(f"Compression parameters - Profile: {profile.get('function', 'Unknown')}, "
                 f"Target resolution: {target_res}, CQ: {target_cq}, Crop: {crop}")
+    
+    if not os.path.exists(workspace):
+            # Create the directory
+            os.makedirs(workspace)
+            logger.debug(f'Directory "{workspace}" created.')
     
     if start is not False or duration is not False:
         time_crop_name = os.path.join(workspace, output_file_name + "_time_crop.mkv")
@@ -65,8 +72,8 @@ def compress(file: str, profile, output_file_name: str, workspace:str, crop: lis
     logger.info(f"Using compression function: {profile['function'][1]}")
     
     success = compression_func(file, profile, output_file_name, workspace, crop, 
-                            target_res, target_cq, channels, start, duration, 
-                            subtitles, tool_path)
+                            target_res, target_cq)
+    
 
     if success:
         logger.info(f"Compression completed successfully for: {output_file_name}")
@@ -163,7 +170,7 @@ def execute(command: list) -> bool:
         logger.error(f"Process failed with exit code: {process.returncode}")
         return False
 
-    logger.info(f"Conversion finished succesfully")
+    logger.debug(f"Command execution finished succesfully")
     return True
 
 def check_output(file_path: str, size_limit=2048) -> bool:
@@ -227,9 +234,9 @@ def temporal_crop(file: str, output_file: str, start: int, duration: int, tool_p
     command =[
     tool_path,
     "-y",
-    "-ss", int(start),
+    "-ss", str(start),
     "-i", file,
-    "-t", int(duration),
+    "-t", str(duration),
     "-c:v", "copy",
     "-c:a", "copy",
     "-copy_unknown",
@@ -249,6 +256,7 @@ def temporal_crop(file: str, output_file: str, start: int, duration: int, tool_p
 def video_HandbrakeAV1(
     file: str, profile: dict, output_file_name: str, workspace: str, crop: list, target_res: list, target_cq: float, 
     tool_path: str = r"tools\HandBrakeCLI.exe") -> bool:
+
     """
     Encodes video using HandBrakeCLI with AV1 codec and specified quality settings.
     
@@ -263,17 +271,13 @@ def video_HandbrakeAV1(
         crop (list): Crop values [top, bottom] in pixels
         target_res (int): Target width resolution
         target_cq (float): Constant quality value (lower = higher quality)
-        channels (int, optional): Audio channel configuration
-        start (int, optional): Start time for encoding
-        duration (int, optional): Duration for encoding
-        subtitles (bool, optional): Include subtitle streams
         tool_path (str, optional): Path to HandBrakeCLI executable
         
     Returns:
         bool: True if encoding succeeded and output is valid, False otherwise
     """
  
-    output_file = os.path.join(workspace, output_file_name)
+    output_file = os.path.join(workspace, output_file_name + ".mkv")
     logger.info(f"Starting HandBrake AV1 encoding: {file} -> {output_file}")
     logger.debug(f"Encoding parameters - Resolution: {target_res}, CQ: {target_cq}, Crop: {crop}")
 
@@ -361,7 +365,7 @@ def video_ffmpeg(
         logger.info(f"Starting HDR metadata type detection for: {input_file}")
         logger.debug(f"Output paths - DoVi: {dovi_metadata_file}, HDR10+: {HDR10_metadata_file}")
 
-        if _dynamic_metadata_type is "uninit":
+        if _dynamic_metadata_type == "uninit":
 
             logger.debug("Metadata type not cached, performing detection")
             _dynamic_metadata_type = False
@@ -528,7 +532,7 @@ def video_ffmpeg(
                 return False
         if not check_output(output_file):
             return False
-        return False
+        return True
              
     def video_encode_ffmpeg(input_file: str, profile: dict, output_file: str, crop: list, target_res: list, target_cq: float, 
     tool_path: str = r"ffmpeg") -> bool:
@@ -640,45 +644,74 @@ def video_ffmpeg(
                 logger.debug(f"Complete FFmpeg command: {' '.join(cmd)}")
                 result = subprocess.run(cmd, capture_output=True, text=True, check=True)
                 return result.stdout.strip()
+            
+            def ffprobe_framerate_to_float(framerate_string):
+                # Remove any whitespace
+                framerate_string = framerate_string.strip()
+                
+                # Use the fractions module to parse and convert to float
+                fraction = Fraction(framerate_string)
+                return round(float(fraction), 3)
 
 
             # Try constant-frame-rate
             raw = probe("r_frame_rate")
             logger.debug(f"Probe r_frame_rate: {raw}")  # Logging probe output[2]
-            if 10 <= float(raw) <= 120:
-                framerate = raw
+            framerate_local = ffprobe_framerate_to_float(raw)
+            logger.debug(f"Probe r_frame_rate: {framerate_local}")  # Logging probe output[2]
+            if 10 <= float(framerate_local) <= 1000:
+                framerate = framerate_local
                 return True
 
             # Fallback to variable-frame-rate
             raw = probe("avg_frame_rate")
             logger.debug(f"Probe avg_frame_rate: {raw}")  # Fallback probe logging[2]
-            if 10 <= float(raw) <= 120:
-                framerate = raw
+            framerate_local = ffprobe_framerate_to_float(raw)
+            logger.debug(f"Probe r_frame_rate: {framerate_local}")  # Logging probe output[2]
+            if 10 <= float(framerate_local) <= 1000:
+                framerate = framerate_local
                 return True
             
             logger.error(f"Framerate detection failed")
             return False
                 
-
-    def hevc_to_mkv(input_file, output_file):
+    def hevc_to_mkv(input_file, output_file_name):
         logger.info(f"Converting .hevc to .mkv")
+        mp4_name = output_file_name + ".mp4"
+        final_name = output_file_name + ".mkv"
         command = [
             'ffmpeg', '-y',  # Overwrite output file
             '-fflags', '+genpts',  # Generate presentation timestamps
-            '-r', framerate,    # Set framerate
+            '-r', str(framerate),    # Set framerate
             '-i', input_file,       # Input HEVC file
-            '-c:v', 'copy',        # Copy video stream without re-encoding
-            output_file
+            '-c:v', 'copy', 
+            '-movflags', 'frag_keyframe+empty_moov',
+            mp4_name
         ]
 
         logger.debug(f"Complete FFmpeg command: {' '.join(command)}")
-        if execute(command):
-            if check_output(output_file):
-                return True
-            else:
-                return False
-        else:
+        if not execute(command):
             return False
+        if not check_output(mp4_name):
+                return False
+        
+        logger.info(f"1st step success")
+        
+        command = [
+            'ffmpeg', '-y',
+            '-i', mp4_name,
+            '-c:v', 'copy',
+            final_name
+        ]
+
+        logger.debug(f"Complete FFmpeg command: {' '.join(command)}")
+        if not execute(command):
+            return False
+        if not check_output(final_name):
+            return False
+        
+        logger.info(f"2nd step success")
+        return True
                 
     if profile["HDR_enable"][1]:
 
@@ -713,7 +746,7 @@ def video_ffmpeg(
             logger.error("FFmpeg encoding failed")
             return False
 
-        HDR_inject_name = name + "_HDR_inject.hevc"
+        HDR_inject_name = os.path.join(workspace, name + "_HDR_inject.hevc")
         if _dynamic_metadata_type == "HDR10": metadata_name = HDR10_metadata_file
         elif _dynamic_metadata_type == "DoVi": metadata_name = dovi_metadata_file
         else: return False
@@ -722,7 +755,7 @@ def video_ffmpeg(
             return False
 
         # Convert final HEVC to MKV container
-        final_name = os.path.join(workspace, name + ".mkv")
+        final_name = os.path.join(workspace, name)
         if not hevc_to_mkv(HDR_inject_name, final_name):
             logger.error("HEVC to MKV conversion failed")
             return False
@@ -738,3 +771,27 @@ def video_ffmpeg(
     
     logger.info(f"FFmpeg encoding workflow completed successfully: {final_name}")
     return True
+
+
+if __name__ == '__main__':
+    #workspace = r"D:\Files\Projects\AutoCompression\Tests\workspaces\compressor2\ffmpeg"
+    #input_file = r"D:\Files\Projects\AutoCompression\Tests\DoVi.mkv"
+    #profile_path = r"D:\Files\Projects\AutoCompression\Profiles\h265_slow_nvenc.yaml"
+
+    workspace = r"D:\Files\Projects\AutoCompression\Tests\workspaces\compressor2\handbrake"
+    input_file = r"D:\Files\Projects\AutoCompression\Tests\DoVi.mkv"
+    profile_path = r"D:\Files\Projects\AutoCompression\Profiles\AV1_archive_software.yaml"
+
+    if not os.path.exists(workspace):
+            # Create the directory
+            os.makedirs(workspace)
+            print(f'Directory "{workspace}" created.')
+
+    log_path = os.path.join(workspace, "app.log")
+    logger = logger_setup.primary_logger(log_level=logging.INFO, log_file=log_path)
+    log_path = os.path.join(workspace, "stream.log")
+    stream_logger = logger_setup.file_logger(log_path, log_level=logging.DEBUG)
+
+
+    profile, profile_settings = readProfile(profile_path)
+    compress(input_file, profile, "DoVi", workspace, [10, 10], 1920, 30, False, 2, 5, False)
