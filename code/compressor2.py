@@ -3,7 +3,7 @@ import logging
 import AVTest
 from threading import Thread
 import logger_setup
-from main import readProfile
+import readers
 from fractions import Fraction
 # Retrieve the logger once at the module level
 logger = logging.getLogger("AppLogger")
@@ -775,12 +775,12 @@ def video_ffmpeg(
 
 if __name__ == '__main__':
     #workspace = r"D:\Files\Projects\AutoCompression\Tests\workspaces\compressor2\ffmpeg"
-    #input_file = r"D:\Files\Projects\AutoCompression\Tests\DoVi.mkv"
+    #input_file = r"D:\Files\Projects\AutoCompression\Tests\HDR10_plus.mkv"
     #profile_path = r"D:\Files\Projects\AutoCompression\Profiles\h265_slow_nvenc.yaml"
 
-    workspace = r"D:\Files\Projects\AutoCompression\Tests\workspaces\compressor2\handbrake"
-    input_file = r"D:\Files\Projects\AutoCompression\Tests\DoVi.mkv"
-    profile_path = r"D:\Files\Projects\AutoCompression\Profiles\AV1_archive_software.yaml"
+    workspace = r"D:\Files\Projects\AutoCompression\Tests\workspaces\HDR10_H265"
+    input_file = r"D:\Files\Projects\AutoCompression\Tests\HDR10_plus.mkv"
+    profile_path = r"D:\Files\Projects\AutoCompression\Profiles\h265_slow_nvenc.yaml"
 
     if not os.path.exists(workspace):
             # Create the directory
@@ -794,4 +794,4 @@ if __name__ == '__main__':
 
 
     profile, profile_settings = readProfile(profile_path)
-    compress(input_file, profile, "DoVi", workspace, [10, 10], 1920, 30, False, 2, 5, False)
+    compress(input_file, profile, "H265_HDR10", workspace, [10, 10], 1920, 30, False, 2, 5, False)

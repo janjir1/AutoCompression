@@ -4,23 +4,26 @@ function:
 
 #Enable HDR only for h265 (HEVC)
 HDR_enable:
- -HDR_enable: true
+ -HDR_enable: false
  
 # Video settings
 video:
  -c:v: hevc_nvenc         # Video codec: NVENC HEVC
  -preset: slow            # Encoding preset: slow for better quality
- -tune: uhq               # Ultra High Quality tuning
- -g: 120                  # Group of Pictures size
- -bf: 4                   # Number of B-frames
- -refs: 4                 # Number of reference frames
- -spatial-aq: 1           # Enable spatial adaptive quantization
- -temporal-aq: 1          # Enable temporal adaptive quantization
- -aq-strength: 8          # AQ filter strength
+# -tune: uhq               # Ultra High Quality tuning
+# -g: 120                  # Group of Pictures size
+# -bf: 4                   # Number of B-frames
+# -refs: 4                 # Number of reference frames
+# -spatial-aq: 1           # Enable spatial adaptive quantization
+# -temporal-aq: 1          # Enable temporal adaptive quantization
+# -aq-strength: 8          # AQ filter strength
  -pix_fmt: p010le         # Pixel format: 10-bit
  -b:v: 0                  # Remove bitrate limit
  -rc-lookahead: 50        # Lookahead for rate control
- -vf: hqdn3d              # Denoising filter
+# -vf: hqdn3d              # Denoising filter
+ -loglevel: debug
+# -probesize: 200M
+# -analyzeduration: 200M
 
 # Audio settings
 stereo:

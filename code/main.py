@@ -6,7 +6,8 @@ import logging
 import logger_setup
 import os, subprocess, traceback
 import json
-import compressor
+import compressor2
+import readers
 
 def compressAV(file: str, workspace: str, profile_path: str, settings_path: str) -> bool:
 
@@ -19,10 +20,10 @@ def compressAV(file: str, workspace: str, profile_path: str, settings_path: str)
             os.makedirs(workspace)
             print(f'Directory "{workspace}" created.')
     
-    output_file = os.path.join(workspace, os.path.splitext(os.path.basename(file))[0] + ".mkv")
+    output_file = os.path.join(workspace, os.path.splitext(os.path.basename(file))[0])
 
     try:
-        profile, profile_settings = readProfile(profile_path)
+        profile, profile_settings = readers.readProfile(profile_path)
     except Exception as e:
         logger.error("Not able to read profile file")
         logger.debug("Failed due to reason:")
@@ -30,7 +31,7 @@ def compressAV(file: str, workspace: str, profile_path: str, settings_path: str)
         return False
     
     try:
-        settings = readSettings(settings_path)
+        settings = readers.readSettings(settings_path)
     except Exception as e:
         logger.error("Not able to read settings file")
         logger.debug("Failed due to reason:")
@@ -55,7 +56,7 @@ def compressAV(file: str, workspace: str, profile_path: str, settings_path: str)
 
     orig_res, crop, target_res, target_cq, channels = runTests(file, workspace, profile, profile_settings, settings)
 
-    result = compressor.compress(file, profile, output_file, crop, target_res, target_cq, channels, subtitles= True)
+    result = compressor2.compress(file, profile, output_file, workspace, crop, target_res, target_cq, False, False)
     if not result:
         return False
 
@@ -68,52 +69,14 @@ def compressAV(file: str, workspace: str, profile_path: str, settings_path: str)
 
     return output_file_size_GB
 
-def readProfile(yaml_profile):
-    with open(yaml_profile, 'r') as file:
-        loaded_data = yaml.safe_load(file)
-
-    profile = dict()
-    for key, value in loaded_data.items():
-        profile[key] = list()
-        for subvalue in value.items():
-            profile[key].append(str(subvalue[0]))
-            profile[key].append(str(subvalue[1]))
-
-    profile_settings = loaded_data["test_settings"]
-
-    return profile, profile_settings
-
-def readSettings(yaml_settings):
-
-    with open(yaml_settings, 'r') as file:
-        loaded_data = yaml.safe_load(file)
-
-    
-    dictionar = dict()
-    for key, value in loaded_data.items():
-        dictionar[key] = list()
-        for subvalue in value.items():
-            dictionar[key].append(subvalue[1])
-
-    settings = dict()
-    for key in dictionar.keys():
-
-        enable = dictionar[key][0]
-        if type(enable) is not bool:
-            enable = False
-        else: dictionar[key].pop(0)
-
-        settings[key] = [enable, dictionar[key]]
-
-    return settings
      
 
 if __name__ == '__main__':
 
-    file = r"C:\Users\janji\Desktop\Done32.mkv"
-    profile_path = r"Profiles\AV1_archive_software.yaml"
+    file = r"E:\Filmy\hrané\Action\James Bond - Spectre.mkv"
+    profile_path = r"Profiles\h265_slow_nvenc.yaml"
     settings_path = r"Profiles\Test_settings.yaml"
-    workspace = r"Workspace\test1"
+    workspace = r"D:\Files\Projects\AutoCompression\workspace\test1"
 
     if not os.path.exists(workspace):
             # Create the directory
@@ -136,8 +99,11 @@ if __name__ == '__main__':
     passed = compressAV(file, workspace, profile_path, settings_path)
 
     """TODO:
-        create ffmpeg encoding pipeline
-        Change mp4 to mkv for testing
+        .avi doesnt support fast seek
+        do HDR workflow onlz with HEVC
+        audio
+        subtitles
+        Edit log messages
         Logger doesnt work in multithreading
         Output calculated things and settings to a file
         Include metadata for windows (length, resolution)

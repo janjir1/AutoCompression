@@ -8,7 +8,7 @@ import numpy as np
 import soundfile as sf
 from PIL import Image
 import logging
-import compressor
+import compressor2
 import traceback
 
 #TODO: add cleanup
@@ -92,14 +92,17 @@ def getRes_parallel(workspace: str, orig_video_path : str, decode_table: dict, p
     name = str(os.path.basename(orig_video_path)[:-4]) + "_res"
     video_folder = os.path.join(workspace, name)
 
-    _prepareRes_test(video_folder, orig_video_path, h_res_values, number_of_scenes, scene_length, cq_value, profile, crop)
+    video_paths = _prepareRes_test(video_folder, orig_video_path, h_res_values, number_of_scenes, scene_length, cq_value, profile, crop)
 
+    """
     video_paths = list()
-    files = [f for f in os.listdir(video_folder) if os.path.isfile(os.path.join(video_folder, f))]
+    files = [f for f in os.listdir(video_folder) 
+         if os.path.isfile(os.path.join(video_folder, f)) and f.lower().endswith('.mkv')]
+
     for file in files:
         for _ in range(num_of_VQA_runs):
             video_paths.append(os.path.join(video_folder, file))
-
+    """
      # Manager for sharing dictionary and lock between processes
     with Manager() as manager:
         shared_dict = manager.dict()  # Shared dictionary to store outputs
@@ -188,7 +191,7 @@ def _run_VQA_process(video_path: str, shared_dict: dict, lock) -> int:
     """
 
     # Extract video ID from the filename
-    match = re.search(r'\d*(?=_cq\d.mp4)', video_path)
+    match = re.search(r'\d*(?=_cq\d.mkv)', video_path)
     video_id = match.group() if match else video_path
 
     # Extract filename without extension
@@ -278,7 +281,7 @@ def _prepareRes_test(
         logger.error(f"Failed to retrieve video duration for {file_path}")
         return
 
-    results = dict()
+    created_files = list()
 
     # Calculate timestamps for scene extraction
     timestep = int(duration/(number_of_scenes+1))
@@ -288,14 +291,17 @@ def _prepareRes_test(
 
         for h_resolution in h_res_values:
 
-            output_name = f"{timestamp}_{h_resolution}_cq{cq_value}.mp4"
+            output_name = f"{timestamp}_{h_resolution}_cq{cq_value}"
             output_path = os.path.join(output_folder, output_name)
 
-            results[output_name] = dict()
+            created_files.append(output_path + ".mkv")
 
             # Perform encoding using the compressor module
             logger.debug(f"Creating test file {output_name}")
-            _ = compressor.compress(file_path, profile, output_path,crop, h_resolution, cq_value, False, timestep*timestamp, scene_length)
+            _ = compressor2.compress(file_path, profile, output_name, output_folder, crop, h_resolution, cq_value, False, timestep*timestamp, scene_length)
+
+    return created_files
+
 #endregion
 
 # region Basic Tests
@@ -453,8 +459,8 @@ def getVMAF(reference_file: str, distorted_file: str, threads: int = 8) -> float
 
     command = [
         'ffmpeg',
-        '-i', reference_file,        # Input reference file
-        '-i', distorted_file,        # Input distorted file
+        '-i', reference_file + ".mkv",        # Input reference file
+        '-i', distorted_file + ".mkv",        # Input distorted file
         '-lavfi', f'libvmaf=n_threads={threads}:log_path={output_file}',  # VMAF with multithreading and log output
         '-f', 'null', '-'            # No output file, just compute VMAF
     ]
@@ -546,7 +552,7 @@ def getCQ(workspace: str, orig_video_path: str, h_res: int, profile: list, crop:
     for timestamp in range(number_of_scenes):
         timestamp = timestamp + 1
 
-        output_name = f"{timestamp}_reference.mp4"
+        output_name = f"{timestamp}_reference"
         output_path = os.path.join(video_folder, output_name)
 
         logger.debug(f"Creating reference file {output_name}")
@@ -566,7 +572,7 @@ def getCQ(workspace: str, orig_video_path: str, h_res: int, profile: list, crop:
             if not isinstance(results.get(timestamp), dict):
                 results[timestamp] = dict()
 
-            output_name = f"{timestamp}_{cq_values[position]}.mp4"
+            output_name = f"{timestamp}_{cq_values[position]}"
             output_path = os.path.join(video_folder, output_name)
 
             logger.debug(f"Getting VMAF result for: {output_name}")
@@ -574,7 +580,7 @@ def getCQ(workspace: str, orig_video_path: str, h_res: int, profile: list, crop:
             results[timestamp][cq_values[position]] = _createAndTestVMAF(output_path, orig_video_path, h_res, cq_values[position], timestamp*timestep, scene_length, profile, crop, reference_files[timestamp-1], threads)
 
     # Compute optimized VMAF for CQ 18
-    output_name = f"1_{cq_values[1]}.mp4"
+    output_name = f"1_{cq_values[1]}"
     output_path = os.path.join(video_folder, output_name)
     logger.debug(f"Getting VMAF result for: {output_name}")
     optimization_VMAF = _createAndTestVMAF(output_path, orig_video_path, h_res, cq_values[1], 1*timestep, scene_length, profile, crop, reference_files[0], threads)
@@ -660,7 +666,7 @@ def _createAndTestVMAF(
     - float: VMAF score if reference video is provided, else None.
     """
 
-    _ = compressor.compress(orig_video_path, profile, output_path, crop, h_res, cq_value, False, start_time, scene_length)
+    _ = compressor2.compress(orig_video_path, profile, os.path.basename(output_path), os.path.dirname(output_path), crop, h_res, cq_value, False, start_time, scene_length)
     if reference_video is not None:
         VMAF_value = getVMAF(reference_video, output_path, threads)
         logger.debug(f"VMAF Score: {VMAF_value}")

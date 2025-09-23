@@ -1,5 +1,5 @@
 Black_bar_detection:
-  Enabled: false
+  Enabled: true
   frames_to_detect: 10
 
 Resolution_calculation:
@@ -7,7 +7,7 @@ Resolution_calculation:
   testing_resolutions:
     - 854
     - 3840
-  num_of_tests: 14 #return to 15
+  num_of_tests: 15 #15
   scene_length: 1
   cq_value: 1
   VQA_per_test: 3
@@ -15,13 +15,13 @@ Resolution_calculation:
   Threads: 3
 
 CQ_calculation:
-  Enabled: false
+  Enabled: true
   cq_values:
     - 15
     - 18
     - 27
     - 36
-  number_of_scenes: 2 #return to 3
+  number_of_scenes: 3 #3
   cq_reference: 1
   scene_length: 50
   keep_best_scenes: 0.6
