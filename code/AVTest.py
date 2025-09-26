@@ -10,6 +10,10 @@ from PIL import Image
 import logging
 import compressor2
 import traceback
+from VideoClass import VideoProcessingConfig
+import copy
+import ast
+from typing import Union
 
 #TODO: add cleanup
 
@@ -67,32 +71,22 @@ def getVQA(video_path: str, num_of_runs: int = 4) -> float:
     return average_quality
 
 # region getRes_parallel
-def getRes_parallel(workspace: str, orig_video_path : str, decode_table: dict, profile: dict, crop: list, h_res_values: list, number_of_scenes:int = 15, scene_length: int = 1, cq_value: int = 1, num_of_VQA_runs: int = 2, keep_best_slopes:float =0.6, threads: int= 2) -> int: #enter full path to video
+def getRes_parallel(VPC: VideoProcessingConfig) -> bool: #enter full path to video
     """
     Determines the optimal resolution for video encoding based on VQA scores.
 
-    Parameters:
-    - workspace (str): Path to the workspace directory.
-    - orig_video_path (str): Full path to the original video file.
-    - decode_table (dict): Mapping of resolution values to quality thresholds.
-    - profile (dict): Encoding profile parameters.
-    - crop (list): Crop settings.
-    - h_res_values (list): List of resolution values to test.
-    - number_of_scenes (int): Number of scenes to extract (default: 15).
-    - scene_length (int): Duration of each scene in seconds (default: 1).
-    - cq_value (int): Constant quality value for encoding (default: 1).
-    - num_of_VQA_runs (int): Number of VQA evaluations per video (default: 2).
-    - keep_best_slopes (float): Fraction of best regression slopes to keep (default: 0.6).
-    - threads (int): Number of parallel processes to use (default: 2).
+    Args:
+            VPC (VideoProcessingConfig): Video processing configuration
 
-    Returns:
-    - int: The selected target resolution.
+        Returns:
+            bool: True if conversion succeeded, False otherwise
     """
-    
-    name = str(os.path.basename(orig_video_path)[:-4]) + "_res"
-    video_folder = os.path.join(workspace, name)
+    res_VPC = copy.deepcopy(VPC)
+    name = VPC.output_file_name + "_res"
 
-    video_paths = _prepareRes_test(video_folder, orig_video_path, h_res_values, number_of_scenes, scene_length, cq_value, profile, crop)
+    res_VPC.setWorkspace(os.path.join(VPC.workspace, name))
+
+    video_paths = _prepareRes_test(res_VPC)
 
     """
     video_paths = list()
@@ -108,12 +102,16 @@ def getRes_parallel(workspace: str, orig_video_path : str, decode_table: dict, p
         shared_dict = manager.dict()  # Shared dictionary to store outputs
         lock = manager.Lock()  # Manager's Lock to prevent overwriting
 
-        with Pool(processes=threads) as pool:
+        with Pool(processes=VPC.test_settings["Resolution_calculation"]["Threads"]) as pool:
                 pool.starmap(_run_VQA_process, [(video_path, shared_dict, lock) for video_path in video_paths])
 
         result_dict = dict(shared_dict)
     
     #make output dict more readable and average the VQA values for each res
+    if len(result_dict) < 2:
+        logger.error("result us empty")
+        return False
+    
     sorted_dict = dict()
     for key in result_dict.keys():
         matches = re.findall(r"\d*", key)
@@ -150,7 +148,7 @@ def getRes_parallel(workspace: str, orig_video_path : str, decode_table: dict, p
 
     #remove worst scenes and make average
     regression_slope = sorted(regression_slope, reverse=True)
-    to_keep = math.ceil(len(regression_slope)*keep_best_slopes)
+    to_keep = math.ceil(len(regression_slope)*VPC.test_settings["Resolution_calculation"]["keep_best_slopes"])
     regression_slope = regression_slope[:to_keep]
     
     average_slope = 0
@@ -162,19 +160,19 @@ def getRes_parallel(workspace: str, orig_video_path : str, decode_table: dict, p
 
     #Assign res to average slope
     target_res = 854
+    decode_table = ast.literal_eval(VPC.getProfileValue(VPC.profile["test_settings"], "res_decode"))
+
     for key in decode_table:
         if average_slope >= decode_table[key]:
             if key > target_res:
                 target_res = key
 
-    #do not allow upscaling
-    orig_res = getH_res(orig_video_path)
+    if target_res > VPC.orig_h_res:
+        target_res = VPC.orig_h_res
 
-    if target_res > orig_res:
-        target_res = orig_res
-
-    logger.info(f"Original resolution: {orig_res}, Target resolution: {target_res}")
-    return target_res
+    logger.info(f"Original resolution: {VPC.orig_h_res}, Target resolution: {target_res}")
+    VPC.setOutputRes(target_res)
+    return True
 
 def _run_VQA_process(video_path: str, shared_dict: dict, lock) -> int:
 
@@ -242,72 +240,47 @@ def _run_VQA_process(video_path: str, shared_dict: dict, lock) -> int:
 
     return result.returncode
 
-def _prepareRes_test(
-    output_folder: str,
-    file_path: str,
-    h_res_values: list,
-    number_of_scenes: int,
-    scene_length: int,
-    cq_value: int,
-    profile: dict,
-    crop: list
-) -> None:
+def _prepareRes_test(VPC: VideoProcessingConfig)-> list:
     """
     Prepares test video files by extracting scenes at specific timestamps and encoding them at different resolutions.
 
-    Parameters:
-    - output_folder (str): Path to the directory where test files will be saved.
-    - file_path (str): Full path to the original video file.
-    - h_res_values (list): List of horizontal resolution values to test.
-    - number_of_scenes (int): Number of scenes to extract from the video.
-    - scene_length (int): Length of each extracted scene in seconds.
-    - cq_value (int): Constant Quality (CQ) value for encoding.
-    - profile (dict): Encoding profile settings.
-    - crop (list): Crop parameters for encoding.
+        Args:
+            VPC (VideoProcessingConfig): Video processing configuration
 
-    Returns:
-    - None
+        Returns:
+            list: list of created files
     """
-
-    # Ensure the output directory exists
-    if not os.path.exists(output_folder):
-            # Create the directory
-            os.makedirs(output_folder)
-            logger.info(f'Directory "{output_folder}" created.')
-
-    # Get the duration of the input video
-    duration = getDuration(file_path)
-    if duration is None:
-        logger.error(f"Failed to retrieve video duration for {file_path}")
-        return
-
     created_files = list()
 
     # Calculate timestamps for scene extraction
-    timestep = int(duration/(number_of_scenes+1))
+    res_settings = VPC.test_settings["Resolution_calculation"]
+    timestep = int(VPC.orig_duration/(res_settings["num_of_tests"]+1))
 
-    for timestamp in range(number_of_scenes):
+    VPC.setDuration(res_settings["scene_length"])
+    VPC.setOutputCQ(res_settings["cq_value"])
+
+    for timestamp in range(res_settings["num_of_tests"]):
         timestamp = timestamp + 1
 
-        for h_resolution in h_res_values:
+        for h_resolution in res_settings["testing_resolutions"]:
 
-            output_name = f"{timestamp}_{h_resolution}_cq{cq_value}"
-            output_path = os.path.join(output_folder, output_name)
+            test_VPC = copy.deepcopy(VPC)
+            test_VPC.setOutputFileName(f"{timestamp}_{h_resolution}_cq{res_settings["cq_value"]}")
+            test_VPC.setStart(timestamp * timestep)
+            test_VPC.setOutputRes(h_resolution)
 
-            created_files.append(output_path + ".mkv")
+            created_files.append(test_VPC.output_file_path)
 
             # Perform encoding using the compressor module
-            logger.debug(f"Creating test file {output_name}")
-            _ = compressor2.compress(file_path, profile, output_name, output_folder, crop, h_resolution, cq_value, False, timestep*timestamp, scene_length)
+            logger.debug(f"Creating test file {test_VPC.output_file_path}")
+            _ = compressor2.compress(test_VPC)
 
     return created_files
 
 #endregion
 
-# region Basic Tests
-
-     
-def getVMAF(reference_file: str, distorted_file: str, threads: int = 8) -> float:
+# region Basic Tests  
+def getVMAF(reference_file: str, distorted_file: str, threads: int = 8) -> Union[float, None]:
     """
     Computes VMAF (Video Multi-Method Assessment Fusion) score between a reference video
     and a distorted video using FFmpeg.
@@ -326,8 +299,8 @@ def getVMAF(reference_file: str, distorted_file: str, threads: int = 8) -> float
 
     command = [
         'ffmpeg',
-        '-i', reference_file + ".mkv",        # Input reference file
-        '-i', distorted_file + ".mkv",        # Input distorted file
+        '-i', reference_file,        # Input reference file
+        '-i', distorted_file,        # Input distorted file
         '-lavfi', f'libvmaf=n_threads={threads}:log_path={output_file}',  # VMAF with multithreading and log output
         '-f', 'null', '-'            # No output file, just compute VMAF
     ]
@@ -369,63 +342,44 @@ def getVMAF(reference_file: str, distorted_file: str, threads: int = 8) -> float
 #endregion
 
 # region getCQ
-def getCQ(workspace: str, orig_video_path: str, h_res: int, profile: list, crop: list,
-          threshold_variable: float, cq_values: list = [15, 18, 27, 36], number_of_scenes: int = 3,
-          cq_reference: int = 1, scene_length: int = 60, keep_best_scenes: float = 0.6, threads: int = 6) -> float:
+def getCQ(VPC: VideoProcessingConfig) -> bool:
     """
     Calculates an optimal CQ value for video encoding based on VMAF quality assessment.
 
-    Parameters:
-    - workspace (str): Path to the workspace directory.
-    - orig_video_path (str): Path to the original video file.
-    - h_res (int): Target horizontal resolution.
-    - profile (list): Encoding profile settings.
-    - crop (list): Crop settings.
-    - threshold_variable (float): VMAF threshold for CQ optimization.
-    - cq_values (list): List of CQ values to evaluate. Default is [15, 18, 27, 36].
-    - number_of_scenes (int): Number of scenes to analyze. Default is 3.
-    - cq_reference (int): Reference CQ value for VMAF comparison. Default is 1.
-    - scene_length (int): Scene duration in seconds. Default is 60.
-    - keep_best_scenes (float): Fraction of best scenes to keep for averaging. Default is 0.6.
-    - threads (int): Number of threads for processing. Default is 6.
-    
-    Returns:
-    - float: Optimized CQ value rounded to the nearest 0.5, or None if an error occurs.
-    """  
+    Args:
+        VPC (VideoProcessingConfig): Video processing configuration
 
+    Returns:
+        bool: True if conversion succeeded, False otherwise
+    """  
+    cq_values = VPC.test_settings["CQ_calculation"]["cq_values"]
     if len(cq_values) != 4:
         logger.error("cq values list different size")
-        return None
+        return False
     
     cq_values.sort()
-    name = str(os.path.basename(orig_video_path)[:-4]) + "_cq"
-    video_folder = os.path.join(workspace, name)
-
-    if not os.path.exists(video_folder):
-            # Create the directory
-            os.makedirs(video_folder)
-            logger.debug(f'Directory "{video_folder}" created.')
-
-    duration = getDuration(orig_video_path)
-    if duration is None:
-        logger.error("Could not determine video duration.")
-        return None
+    cq_VPC = copy.deepcopy(VPC)
+    name = VPC.output_file_name + "_cq"
+    cq_VPC.setWorkspace(os.path.join(VPC.workspace, name))
+    number_of_scenes = cq_VPC.test_settings["CQ_calculation"]["number_of_scenes"]
 
     results = dict()
-    timestep = int(duration/(number_of_scenes+1))
+    timestep = int(cq_VPC.orig_duration/(number_of_scenes+1))
     reference_files = list()
 
     #genereate reference videos
     for timestamp in range(number_of_scenes):
         timestamp = timestamp + 1
 
-        output_name = f"{timestamp}_reference"
-        output_path = os.path.join(video_folder, output_name)
+        cq_VPC.setOutputFileName(f"{timestamp}_reference")
+        cq_VPC.setStart(timestamp * timestep)
+        cq_VPC.setDuration(VPC.test_settings["CQ_calculation"]["scene_length"])
+        cq_VPC.setOutputCQ(VPC.test_settings["CQ_calculation"]["cq_reference"])
 
-        logger.debug(f"Creating reference file {output_name}")
+        logger.debug(f"Creating reference file {cq_VPC.output_file_name}")
         
-        _createAndTestVMAF(output_path, orig_video_path, h_res, cq_reference, timestamp*timestep, scene_length, profile, crop, None, threads)
-        reference_files.append(output_path)
+        _createAndTestVMAF(cq_VPC, reference_video=None)
+        reference_files.append(cq_VPC.output_file_path)
     reference_files.sort() #this will break with 9 or more scenes
 
     results = dict()
@@ -439,18 +393,21 @@ def getCQ(workspace: str, orig_video_path: str, h_res: int, profile: list, crop:
             if not isinstance(results.get(timestamp), dict):
                 results[timestamp] = dict()
 
-            output_name = f"{timestamp}_{cq_values[position]}"
-            output_path = os.path.join(video_folder, output_name)
+            cq_VPC.setOutputFileName(f"{timestamp}_{cq_values[position]}")
+            cq_VPC.setStart(timestamp * timestep)
+            cq_VPC.setOutputCQ(cq_values[position])
 
-            logger.debug(f"Getting VMAF result for: {output_name}")
+            logger.debug(f"Getting VMAF result for: {cq_VPC.output_file_name}")
         
-            results[timestamp][cq_values[position]] = _createAndTestVMAF(output_path, orig_video_path, h_res, cq_values[position], timestamp*timestep, scene_length, profile, crop, reference_files[timestamp-1], threads)
+            results[timestamp][cq_values[position]] = _createAndTestVMAF(cq_VPC, reference_files[timestamp-1])
 
     # Compute optimized VMAF for CQ 18
-    output_name = f"1_{cq_values[1]}"
-    output_path = os.path.join(video_folder, output_name)
-    logger.debug(f"Getting VMAF result for: {output_name}")
-    optimization_VMAF = _createAndTestVMAF(output_path, orig_video_path, h_res, cq_values[1], 1*timestep, scene_length, profile, crop, reference_files[0], threads)
+    cq_VPC.setOutputFileName(f"1_{cq_values[1]}")
+    cq_VPC.setStart(1*timestep)
+    cq_VPC.setOutputCQ(cq_values[1])
+    logger.debug(f"Getting VMAF result for: {cq_VPC.output_file_name}")
+
+    optimization_VMAF = _createAndTestVMAF(cq_VPC, reference_files[0])
 
     for key in results.keys():
         results[key][cq_values[1]] = optimization_VMAF
@@ -473,6 +430,7 @@ def getCQ(workspace: str, orig_video_path: str, h_res: int, profile: list, crop:
         a, b, c = np.polyfit(x, y, 2)
         logger.debug(f"CQ polynomial: {a}, {b}, {c}")
 
+        threshold_variable = np.float64(VPC.getProfileValue(VPC.profile["test_settings"], "cq_threashold"))
         discriminant = b**2 - 4*a*(c-threshold_variable)
         logger.debug(f"CQ discriminant: {discriminant}")
 
@@ -486,56 +444,38 @@ def getCQ(workspace: str, orig_video_path: str, h_res: int, profile: list, crop:
     calculated_CQs = sorted(calculated_CQs)
     logger.debug(f"Calculated CQ values: {calculated_CQs}")
 
-    to_keep = math.ceil(len(calculated_CQs)*keep_best_scenes)
+    to_keep = math.ceil(len(calculated_CQs)*VPC.test_settings["CQ_calculation"]["keep_best_scenes"])
     calculated_CQs = calculated_CQs[:to_keep]
     logger.debug(f"Filtered CQ values: {calculated_CQs}")
 
     if not calculated_CQs:
         logger.error("No valid CQ values calculated.")
-        return None
+        return False
 
     target_cq = sum(calculated_CQs) / len(calculated_CQs)
     target_cq = round(target_cq * 2) / 2  # Round to nearest 0.5
     
     logger.info(f"Calculated CQ: {target_cq}")
-    return target_cq
+    VPC.setOutputCQ(target_cq)
+    return True
 
 #endregion
 
-def _createAndTestVMAF(
-    output_path: str, 
-    orig_video_path: str, 
-    h_res: int, 
-    cq_value: int, 
-    start_time: int, 
-    scene_length: int, 
-    profile: dict, 
-    crop: list, 
-    reference_video: str = None, 
-    threads: int = 6
-) -> float:
+def _createAndTestVMAF(VPC: VideoProcessingConfig, reference_video: Union[str, None] = None) -> Union[float, None]:
     """
     Compresses a video segment and calculates VMAF if a reference video is provided.
 
-    Parameters:
-    - output_path (str): Path to save the compressed video.
-    - orig_video_path (str): Path to the original video.
-    - h_res (int): Target horizontal resolution.
-    - cq_value (int): Constant quality (CQ) value for compression.
-    - start_time (int): Timestamp (in seconds) from where the scene starts.
-    - scene_length (int): Length of the scene in seconds.
-    - profile (dict): Encoding profile settings.
-    - crop (list): Crop parameters for encoding.
-    - reference_video (str, optional): Path to the reference video for VMAF calculation. Default is None.
-    - threads (int, optional): Number of threads to use for VMAF computation. Default is 6.
+    Args:
+        VPC (VideoProcessingConfig): Video processing configuration
+        reference_video (str, optional): Path to the reference video for VMAF calculation. Default is None.
 
     Returns:
     - float: VMAF score if reference video is provided, else None.
     """
 
-    _ = compressor2.compress(orig_video_path, profile, os.path.basename(output_path), os.path.dirname(output_path), crop, h_res, cq_value, False, start_time, scene_length)
+    _ = compressor2.compress(VPC)
     if reference_video is not None:
-        VMAF_value = getVMAF(reference_video, output_path, threads)
+        VMAF_value = getVMAF(reference_video, VPC.output_file_path, VPC.test_settings["CQ_calculation"]["threads"])
         logger.debug(f"VMAF Score: {VMAF_value}")
         return VMAF_value
     else:
@@ -664,33 +604,23 @@ def _extractAudio(orig_video_path: str, work_folder: str, duration: int) -> str:
         logger.error(f"An error occurred: {e}")
 
 #region Blackbars
-def detectBlackbars(orig_video_path: str, workspace: str, frames_to_detect: int = 10) -> list:
+def detectBlackbars(VPC: VideoProcessingConfig) -> bool:
     """
     Detects black bars in a video by sampling frames and analyzing the central column of each frame
     for consecutive black pixels from the top and bottom.
 
-    Parameters:
-    - orig_video_path (str): Full path to the original video file.
-    - workspace (str): Directory where extracted frames and output will be stored.
-    - frames_to_detect (int, optional): Number of frames to sample for detection. Default is 10.
+    Args:
+        VPC (VideoProcessingConfig): Video processing configuration
 
     Returns:
-    - list: A list [black_top_result, black_bottom_result] where:
-        - black_top_result (int): Minimum number of consecutive black pixels detected from the top edge.
-        - black_bottom_result (int): Minimum number of consecutive black pixels detected from the bottom edge.
+        bool: True if conversion succeeded, False otherwise
     """
-    
-    name = str(os.path.basename(orig_video_path)[:-4]) + "_blackDetection"
-    work_folder = os.path.join(workspace, name)
+    blackbars_VPC = copy.deepcopy(VPC)
+    name = VPC.output_file_name + "_blackDetection"
+    blackbars_VPC.setWorkspace(os.path.join(VPC.workspace, name))
 
-    if not os.path.exists(work_folder):
-            # Create the directory
-            os.makedirs(work_folder)
-            logger.debug(f'Directory "{work_folder}" created.')
-
-    # Get the video duration (in seconds)
-    movie_duration = getDuration(orig_video_path)
-    timestep = int(movie_duration/(frames_to_detect+1))
+    frames_to_detect = VPC.test_settings["Black_bar_detection"]["frames_to_detect"]
+    timestep = int(VPC.orig_duration/(frames_to_detect+1))
 
     # Initialize lists to hold the black pixel counts for each sampled frame
     black_top = [0] * frames_to_detect
@@ -702,8 +632,8 @@ def detectBlackbars(orig_video_path: str, workspace: str, frames_to_detect: int 
 
         # Define output filename and path for the extracted frame
         picture_name = str(timestamp) + ".png"
-        target_name = os.path.join(work_folder, picture_name)
-        exportFrame(orig_video_path, target_name, timestamp*timestep)
+        target_name = os.path.join(blackbars_VPC.workspace, picture_name)
+        exportFrame(blackbars_VPC, target_name, timestamp*timestep)
         
         # Open the image and load pixel data
         im = Image.open(target_name, 'r')
@@ -732,14 +662,15 @@ def detectBlackbars(orig_video_path: str, workspace: str, frames_to_detect: int 
     else:
         logger.info("No black bars detected")
 
-    return [black_top_result, black_bottom_result]
+    VPC.crop = [black_top_result, black_bottom_result]
+    return True
 
-def exportFrame(orig_video_path: str, target_name_path: str, time: int, png_quality: int = 2) -> None:
+def exportFrame(VPC: VideoProcessingConfig, target_name_path: str, time: int, png_quality: int = 2) -> None:
     """
     Extracts a single frame from a video at a specified time and saves it as an image.
 
     Parameters:
-    - orig_video_path (str): Full path to the original video file.
+    - VideoProcessingConfig
     - target_name_path (str): Full path where the extracted image will be saved.
     - time (int): Timestamp (in seconds) at which to capture the frame.
     - png_quality (int, optional): Quality parameter for the output image (lower values indicate higher quality). Default is 2.
@@ -755,9 +686,9 @@ def exportFrame(orig_video_path: str, target_name_path: str, time: int, png_qual
     # -update 1 overwrites the file if it exists,
     # -y forces overwriting without prompting.
     command = [
-        "ffmpeg",
+        os.path.join(VPC.tools_path, "ffmpeg.exe"),
         "-ss", str(time),
-        "-i", orig_video_path,
+        "-i", VPC.orig_file_path,
         "-frames:v", "1",
         "-q:v", str(png_quality),
         "-update", "1",
@@ -776,7 +707,7 @@ def exportFrame(orig_video_path: str, target_name_path: str, time: int, png_qual
         logger.error(f"FFmpeg finished with errors. Exit code: {process.returncode}")
         logger.error(process.stderr)
 
-def runTests(file: str, workspace: str, profile, profile_settings, settings):
+def runTests(VPC: VideoProcessingConfig):
     """
     Runs a series of tests on a video file to determine quality parameters such as resolution,
     black bar crop values, constant quality (CQ), and audio channel count.
@@ -804,59 +735,47 @@ def runTests(file: str, workspace: str, profile, profile_settings, settings):
     """
 
     # Get original horizontal resolution of the video
-    try:
-        orig_res = getH_res(file)
-        logger.info(f"Original resolution is {orig_res}")
-    except Exception as e:
-        logger.error("Not able to detect horiontal resolution")
-        logger.debug("Failed due to reason:")
-        logger.debug("".join(traceback.format_exception(type(e), e, e.__traceback__)))
-        return False
 
     # Black bar detection (if enabled)
-    if settings["Black_bar_detection"][0]:
+    if VPC.test_settings["Black_bar_detection"]["Enabled"]:
         try:
-            crop = detectBlackbars(file, workspace, *settings["Black_bar_detection"][1])
+            passed = detectBlackbars(VPC)
         except Exception as e:
             logger.warning("Black bar detection failed")
             logger.debug("Failed due to reason:")
             logger.debug("".join(traceback.format_exception(type(e), e, e.__traceback__)))
-            crop = [0, 0]
     else:
             logger.info("Black bar detection disabled")
-            crop = [0, 0]
-    logger.info(f"Black bars set as {crop[0]}, {crop[1]}")
+
+    logger.info(f"Black bars set as {VPC.crop[0]}, {VPC.crop[1]}")
 
     # Resolution calculation (if enabled)
-    if settings["Resolution_calculation"][0]:
+    if VPC.test_settings["Resolution_calculation"]["Enabled"]:
         try:
-            target_res = getRes_parallel(workspace, file, profile_settings["res_decode"], profile, crop, *settings["Resolution_calculation"][1])
+            passed = getRes_parallel(VPC)
         except Exception as e:
             logger.warning("Resolution detection failed")
             logger.debug("Failed due to reason:")
             logger.debug("".join(traceback.format_exception(type(e), e, e.__traceback__)))
-            target_res = orig_res
     else:
         logger.info("Resolution detection disabled")  
-        target_res = orig_res  
-    logger.info(f"Target resolution is {target_res}p")  
+
+    logger.info(f"Target resolution is {VPC.output_res}p")  
         
     # CQ (Constant Quality) calculation (if enabled)
-    if settings["CQ_calculation"][0]:
+    if VPC.test_settings["CQ_calculation"]["Enabled"]:
         try:
-            target_cq = getCQ(workspace, file, target_res, profile, crop, profile_settings["cq_threashold"], *settings["CQ_calculation"][1])
+            passed = getCQ(VPC)
         except Exception as e:
             logger.warning("CQ test failed")
             logger.debug("Failed due to reason:")
-            logger.debug("".join(traceback.format_exception(type(e), e, e.__traceback__)))
-            target_cq = profile_settings["defalut_cq"]       
+            logger.debug("".join(traceback.format_exception(type(e), e, e.__traceback__)))   
     else:
         logger.info("CQ calculation disabled") 
-        target_cq = profile_settings["defalut_cq"] 
-    logger.info(f"Video has target CQ of {target_cq}")
-
+    logger.info(f"Video has target CQ of {VPC.output_cq}")
+    """
     # Audio channel detection (if enabled)
-    if settings["Channels_calculation"][0]:
+    if VPC.test_settings["Channels_calculation"]["Enabled"]:
         try:
             channels = getNumOfChannels(file, workspace, *settings["Channels_calculation"][1])
         except Exception as e:
@@ -868,29 +787,11 @@ def runTests(file: str, workspace: str, profile, profile_settings, settings):
         logger.info("Channels calculation disabled")
         channels = 2
     logger.info(f"Export will have {channels} channels")
+    """
 
-    return orig_res, crop, target_res, target_cq, channels
 #endregion
 
 
 if __name__ == '__main__':
-    """
-    decode_table =  {854: -10, 1280: -1e-04, 1920: -6.9e-05, 3840: -4e-05}
-    workaspace = r"D:\Files\Projects\AutoCompression\Tests\Martan"
-    file = r"E:\Filmy\hrané\Drama\Marťan-2015-Cz-Dabing-HD.mkv"
-    start = time.time()
-    target_res = getRes_parallel(workaspace, file, [854, 3840], 15, decode_table, num_of_VQA_runs=3)
-    taret_cq = getCQ(workaspace, file, target_res, [15, 18, 27, 36], 3, 0.6, scene_length=50, video_encoding_preset="p2", threads=8)
-    audio_channels = getNumOfChannels(file, workaspace, 0.001, 3600)
-    end = time.time()
-    print(f"this took {end - start}s")
-    print(f"res: {target_res}, cq: {taret_cq}")
-    print(f"audio ch: {audio_channels}")
-    """
-    workaspace = r"D:\Files\Projects\AutoCompression\Tests\Martan"
-    file = r"E:\Filmy\hrané\Fantasy\Na hraně zítřka SD.avi"
-    start = time.time()
-    crop = detectBlackbars(file, workaspace, 9)
-    #print(vfCropComandGenerator(file, crop, 720))
-    end = time.time()
-    print(f"this took {end - start}s")
+
+    print("wrong file bro")
