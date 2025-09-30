@@ -81,12 +81,15 @@ def getRes_parallel(VPC: VideoProcessingConfig) -> bool: #enter full path to vid
         Returns:
             bool: True if conversion succeeded, False otherwise
     """
-    res_VPC = copy.deepcopy(VPC)
+    res_VPC = VPC.create_copy()
     name = VPC.output_file_name + "_res"
 
     res_VPC.setWorkspace(os.path.join(VPC.workspace, name))
 
-    video_paths = _prepareRes_test(res_VPC)
+    video_paths, passed = _prepareRes_test(res_VPC)
+
+    if not passed:
+        return False
 
     """
     video_paths = list()
@@ -197,7 +200,7 @@ def _run_VQA_process(video_path: str, shared_dict: dict, lock) -> int:
 
     # Construct the command for VQA execution
     command = [sys.executable, "./FastVQA-and-FasterVQA/vqa.py", "-v", video_path]
-    logger.info(f"Starting VQA calculation on file {name} (Video ID: {video_id}) with PID {os.getpid()}")
+    logger.debug(f"Starting VQA calculation on file {name} (Video ID: {video_id}) with PID {os.getpid()}")
 
     try:
         # Run the command with a timeout of 20 minutes (1200 seconds)
@@ -240,7 +243,7 @@ def _run_VQA_process(video_path: str, shared_dict: dict, lock) -> int:
 
     return result.returncode
 
-def _prepareRes_test(VPC: VideoProcessingConfig)-> list:
+def _prepareRes_test(VPC: VideoProcessingConfig)-> tuple:
     """
     Prepares test video files by extracting scenes at specific timestamps and encoding them at different resolutions.
 
@@ -259,12 +262,14 @@ def _prepareRes_test(VPC: VideoProcessingConfig)-> list:
     VPC.setDuration(res_settings["scene_length"])
     VPC.setOutputCQ(res_settings["cq_value"])
 
+    passed = True
+
     for timestamp in range(res_settings["num_of_tests"]):
         timestamp = timestamp + 1
 
         for h_resolution in res_settings["testing_resolutions"]:
 
-            test_VPC = copy.deepcopy(VPC)
+            test_VPC = VPC.create_copy()
             test_VPC.setOutputFileName(f"{timestamp}_{h_resolution}_cq{res_settings["cq_value"]}")
             test_VPC.setStart(timestamp * timestep)
             test_VPC.setOutputRes(h_resolution)
@@ -273,9 +278,10 @@ def _prepareRes_test(VPC: VideoProcessingConfig)-> list:
 
             # Perform encoding using the compressor module
             logger.debug(f"Creating test file {test_VPC.output_file_path}")
-            _ = compressor2.compress(test_VPC)
+            if not compressor2.compress(test_VPC):
+                passed = False
 
-    return created_files
+    return created_files, passed
 
 #endregion
 
@@ -358,7 +364,7 @@ def getCQ(VPC: VideoProcessingConfig) -> bool:
         return False
     
     cq_values.sort()
-    cq_VPC = copy.deepcopy(VPC)
+    cq_VPC = VPC.create_copy()
     name = VPC.output_file_name + "_cq"
     cq_VPC.setWorkspace(os.path.join(VPC.workspace, name))
     number_of_scenes = cq_VPC.test_settings["CQ_calculation"]["number_of_scenes"]
@@ -378,7 +384,10 @@ def getCQ(VPC: VideoProcessingConfig) -> bool:
 
         logger.debug(f"Creating reference file {cq_VPC.output_file_name}")
         
-        _createAndTestVMAF(cq_VPC, reference_video=None)
+        _, passed = _createAndTestVMAF(cq_VPC, reference_video=None)
+        if not passed:
+            logger.error("Media creation failed")
+            return False
         reference_files.append(cq_VPC.output_file_path)
     reference_files.sort() #this will break with 9 or more scenes
 
@@ -399,7 +408,10 @@ def getCQ(VPC: VideoProcessingConfig) -> bool:
 
             logger.debug(f"Getting VMAF result for: {cq_VPC.output_file_name}")
         
-            results[timestamp][cq_values[position]] = _createAndTestVMAF(cq_VPC, reference_files[timestamp-1])
+            results[timestamp][cq_values[position]], passed = _createAndTestVMAF(cq_VPC, reference_files[timestamp-1])
+            if not passed:
+                logger.error("Media creation failed")
+                return False
 
     # Compute optimized VMAF for CQ 18
     cq_VPC.setOutputFileName(f"1_{cq_values[1]}")
@@ -407,7 +419,10 @@ def getCQ(VPC: VideoProcessingConfig) -> bool:
     cq_VPC.setOutputCQ(cq_values[1])
     logger.debug(f"Getting VMAF result for: {cq_VPC.output_file_name}")
 
-    optimization_VMAF = _createAndTestVMAF(cq_VPC, reference_files[0])
+    optimization_VMAF, passed = _createAndTestVMAF(cq_VPC, reference_files[0])
+    if not passed:
+        logger.error("Media creation failed")
+        return False
 
     for key in results.keys():
         results[key][cq_values[1]] = optimization_VMAF
@@ -461,7 +476,7 @@ def getCQ(VPC: VideoProcessingConfig) -> bool:
 
 #endregion
 
-def _createAndTestVMAF(VPC: VideoProcessingConfig, reference_video: Union[str, None] = None) -> Union[float, None]:
+def _createAndTestVMAF(VPC: VideoProcessingConfig, reference_video: Union[str, None] = None) -> tuple[Union[float, None], bool]:
     """
     Compresses a video segment and calculates VMAF if a reference video is provided.
 
@@ -473,13 +488,13 @@ def _createAndTestVMAF(VPC: VideoProcessingConfig, reference_video: Union[str, N
     - float: VMAF score if reference video is provided, else None.
     """
 
-    _ = compressor2.compress(VPC)
+    passed = compressor2.compress(VPC)
     if reference_video is not None:
         VMAF_value = getVMAF(reference_video, VPC.output_file_path, VPC.test_settings["CQ_calculation"]["threads"])
         logger.debug(f"VMAF Score: {VMAF_value}")
-        return VMAF_value
+        return VMAF_value, passed
     else:
-        return None
+        return None, passed
 
 #region Num of Channels
 def getNumOfChannels(
@@ -615,7 +630,7 @@ def detectBlackbars(VPC: VideoProcessingConfig) -> bool:
     Returns:
         bool: True if conversion succeeded, False otherwise
     """
-    blackbars_VPC = copy.deepcopy(VPC)
+    blackbars_VPC = VPC.create_copy()
     name = VPC.output_file_name + "_blackDetection"
     blackbars_VPC.setWorkspace(os.path.join(VPC.workspace, name))
 
@@ -707,7 +722,7 @@ def exportFrame(VPC: VideoProcessingConfig, target_name_path: str, time: int, pn
         logger.error(f"FFmpeg finished with errors. Exit code: {process.returncode}")
         logger.error(process.stderr)
 
-def runTests(VPC: VideoProcessingConfig):
+def runTests(VPC: VideoProcessingConfig) -> bool:
     """
     Runs a series of tests on a video file to determine quality parameters such as resolution,
     black bar crop values, constant quality (CQ), and audio channel count.
@@ -735,11 +750,12 @@ def runTests(VPC: VideoProcessingConfig):
     """
 
     # Get original horizontal resolution of the video
-
+    passed = True
+    test_passed = True
     # Black bar detection (if enabled)
     if VPC.test_settings["Black_bar_detection"]["Enabled"]:
         try:
-            passed = detectBlackbars(VPC)
+            test_passed = detectBlackbars(VPC)
         except Exception as e:
             logger.warning("Black bar detection failed")
             logger.debug("Failed due to reason:")
@@ -749,10 +765,14 @@ def runTests(VPC: VideoProcessingConfig):
 
     logger.info(f"Black bars set as {VPC.crop[0]}, {VPC.crop[1]}")
 
+    if not test_passed:
+        passed = False
+        test_passed = True
+
     # Resolution calculation (if enabled)
     if VPC.test_settings["Resolution_calculation"]["Enabled"]:
         try:
-            passed = getRes_parallel(VPC)
+            test_passed = getRes_parallel(VPC)
         except Exception as e:
             logger.warning("Resolution detection failed")
             logger.debug("Failed due to reason:")
@@ -761,11 +781,15 @@ def runTests(VPC: VideoProcessingConfig):
         logger.info("Resolution detection disabled")  
 
     logger.info(f"Target resolution is {VPC.output_res}p")  
+
+    if not test_passed:
+        passed = False
+        test_passed = True
         
     # CQ (Constant Quality) calculation (if enabled)
     if VPC.test_settings["CQ_calculation"]["Enabled"]:
         try:
-            passed = getCQ(VPC)
+            test_passed = getCQ(VPC)
         except Exception as e:
             logger.warning("CQ test failed")
             logger.debug("Failed due to reason:")
@@ -773,6 +797,10 @@ def runTests(VPC: VideoProcessingConfig):
     else:
         logger.info("CQ calculation disabled") 
     logger.info(f"Video has target CQ of {VPC.output_cq}")
+
+    if not test_passed:
+        passed = False
+        test_passed = True
     """
     # Audio channel detection (if enabled)
     if VPC.test_settings["Channels_calculation"]["Enabled"]:
@@ -788,7 +816,7 @@ def runTests(VPC: VideoProcessingConfig):
         channels = 2
     logger.info(f"Export will have {channels} channels")
     """
-
+    return passed
 #endregion
 
 

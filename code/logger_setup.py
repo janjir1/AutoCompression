@@ -1,6 +1,6 @@
 import logging, sys
 
-def primary_logger(log_level=logging.INFO, log_file=None):
+def primary_logger(log_level=logging.INFO, log_file=None) -> logging.Logger:
     """
     Configures the logger with separate logging levels for console and file.
     The console shows only messages at or above log_level, while the file logs all levels.

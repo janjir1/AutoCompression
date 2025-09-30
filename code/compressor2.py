@@ -12,6 +12,7 @@ from VideoClass import VideoProcessingConfig
 
 # Retrieve the logger once at the module level
 logger = logging.getLogger("AppLogger")
+stream_logger = logging.getLogger("FileLogger")
 
 
 def compress(VPC: VideoProcessingConfig) -> bool:
@@ -35,7 +36,7 @@ def compress(VPC: VideoProcessingConfig) -> bool:
 
     # Handle temporal cropping if start time or duration is specified
     if VPC.start is not False or VPC.duration is not False:
-        logger.info(f"[compress] Temporal cropping required - Start: {VPC.start}s, Duration: {VPC.duration}s")
+        logger.debug(f"[compress] Temporal cropping required - Start: {VPC.start}s, Duration: {VPC.duration}s")
         VPC.setSourcePath(VPC.orig_file_path)
         VPC.setTargetPath(os.path.join(VPC.workspace, VPC.output_file_name + "_time_crop.mkv"))
         logger.debug(f"[compress] Performing temporal crop to: {VPC.target_path}")
@@ -64,7 +65,7 @@ def compress(VPC: VideoProcessingConfig) -> bool:
 
     # Execute the appropriate compression function
     compression_func = function_mapping[compression_function_name]
-    logger.info(f"[compress] Using compression function: {compression_function_name}")
+    logger.debug(f"[compress] Using compression function: {compression_function_name}")
     
     success = compression_func(VPC)
     
@@ -89,7 +90,7 @@ def execute(command: list) -> bool:
     Returns:
         bool: True if process finished successfully (exit code 0), False otherwise
     """
-    logger.info(f"[execute] Starting command execution")
+    logger.debug(f"[execute] Starting command execution")
     logger.debug(f"[execute] Command: {' '.join(command)}")
     
     # Start the process with UTF-8 encoding
@@ -230,21 +231,36 @@ def temporal_crop(VPC: VideoProcessingConfig) -> bool:
         and significantly reduce processing time compared to re-encoding.
     """
 
-    logger.info(f"[temporal_crop] Starting temporal crop operation")
+    logger.debug(f"[temporal_crop] Starting temporal crop operation")
     logger.debug(f"[temporal_crop] Source: {VPC.source_path} -> Target: {VPC.target_path}")
     logger.debug(f"[temporal_crop] Crop parameters - Start: {VPC.start}s, Duration: {VPC.duration}s")
 
-    command = [
-        os.path.join(VPC.tools_path, "ffmpeg"),
-        "-y",  # Overwrite output files
-        "-ss", str(VPC.start),  # Start time
-        "-i", VPC.source_path,  # Input file
-        "-t", str(VPC.duration),  # Duration
-        "-c:v", "copy",  # Copy video stream without re-encoding
-        "-c:a", "copy",  # Copy audio stream without re-encoding
-        "-copy_unknown",  # Copy unknown streams
-        VPC.target_path  # Output file
-    ]
+    if VPC.profile["FS_enable"][1] and VPC.FS_support:
+        command = [
+            os.path.join(VPC.tools_path, "ffmpeg"),
+            "-y",  # Overwrite output files
+            "-ss", str(VPC.start),  # Start time
+            "-i", VPC.source_path,  # Input file
+            "-t", str(VPC.duration),  # Duration
+        ]
+    else:
+        command = [
+            os.path.join(VPC.tools_path, "ffmpeg"),
+            "-y",  # Overwrite output files
+            "-fflags", "+genpts",                              # Generate missing PTS
+            "-copyts",                                         # Preserve input timestamps
+            "-avoid_negative_ts", "make_zero",                 # Shift any negative DTS to zero
+            "-i", VPC.source_path,  # Input file
+            "-ss", str(VPC.start),  # Start time
+            "-t", str(VPC.duration*3),  # Duration
+        ]
+
+    command = command + [   
+                            "-c:v", "copy",  # Copy video stream without re-encoding
+                            "-an",  # Copy audio stream without re-encoding
+                            "-copy_unknown",  # Copy unknown streams
+                            VPC.target_path  # Output file
+                        ]
 
     logger.debug(f"[temporal_crop] FFmpeg command: {' '.join(command)}")
 
@@ -273,7 +289,7 @@ def video_HandbrakeAV1(VPC: VideoProcessingConfig) -> bool:
     Returns:
         bool: True if encoding succeeded and output is valid, False otherwise
     """
-    logger.info(f"[video_HandbrakeAV1] Starting HandBrake AV1 encoding")
+    logger.debug(f"[video_HandbrakeAV1] Starting HandBrake AV1 encoding")
     logger.debug(f"[video_HandbrakeAV1] Source: {VPC.source_path} -> Output: {VPC.output_file_path}")
     logger.debug(f"[video_HandbrakeAV1] Encoding parameters - Resolution: {VPC.output_res}, CQ: {VPC.output_cq}, Crop: {VPC.crop}")
 
@@ -297,7 +313,7 @@ def video_HandbrakeAV1(VPC: VideoProcessingConfig) -> bool:
 
     if execute(command):
         if check_output(VPC.output_file_path):
-            logger.info(f"HandBrake AV1 encoding completed successfully: {VPC.output_file_path}")
+            logger.debug(f"HandBrake AV1 encoding completed successfully: {VPC.output_file_path}")
             return True
         else:
             logger.error(f"[video_HandbrakeAV1] Output file validation failed")
@@ -321,7 +337,7 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
     Returns:
         bool: True if encoding completed successfully, False otherwise
     """
-    logger.info(f"[video_ffmpeg] Starting FFmpeg encoding workflow")
+    logger.debug(f"[video_ffmpeg] Starting FFmpeg encoding workflow")
     logger.debug(f"[video_ffmpeg] HDR processing enabled: {VPC.profile['HDR_enable'][1]}")
 
     def get_video_metadata_type(VPC: VideoProcessingConfig):
@@ -344,12 +360,12 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
             DoVi detection takes priority over HDR10+ detection.
         """
         if VPC.HDR_type == "uninit":
-            logger.info(f"[video_ffmpeg.get_video_metadata_type] Starting HDR metadata type detection for: {VPC.source_path}")
+            logger.debug(f"[video_ffmpeg.get_video_metadata_type] Starting HDR metadata type detection for: {VPC.source_path}")
             logger.debug(f"[video_ffmpeg.get_video_metadata_type] Output paths - DoVi: {VPC.dovi_metadata_file}, HDR10+: {VPC.HDR10_metadata_file}")
             logger.debug("[video_ffmpeg.get_video_metadata_type] Metadata type not cached, performing detection")
 
             # Try Dolby Vision first
-            logger.info("[video_ffmpeg.get_video_metadata_type] Attempting Dolby Vision metadata extraction")
+            logger.debug("[video_ffmpeg.get_video_metadata_type] Attempting Dolby Vision metadata extraction")
             dovi_tool_path = os.path.join(VPC.tools_path, "dovi_tool.exe")
             dovi = [f"{dovi_tool_path}", "extract-rpu", "-i", f"{VPC.source_path}", "-o", f"{VPC.dovi_metadata_file}"]
             logger.debug(f"[video_ffmpeg.get_video_metadata_type] DoVi extraction command: {' '.join(dovi)}")
@@ -374,11 +390,11 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
                     logger.warning("[video_ffmpeg.get_video_metadata_type] HDR10+ tool execution failed")
 
                 if check_output(VPC.HDR10_metadata_file):
-                    logger.info("HDR10+ metadata file is valid")
+                    logger.debug("HDR10+ metadata file is valid")
                     VPC.HDR_type = "HDR10"
                     return True
                 else: 
-                    logger.info("HDR10+ metadata file is not valid")
+                    logger.debug("HDR10+ metadata file is not valid")
                     VPC.HDR_type = "None"
                     return True
         else:  # Metadata type has been previously cached
@@ -403,7 +419,7 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
 
         #TODO spatial crop for dovi
 
-        logger.info(f"[video_ffmpeg.video_HDR_extract] Starting HDR metadata extraction for: {VPC.source_path}")
+        logger.debug(f"[video_ffmpeg.video_HDR_extract] Starting HDR metadata extraction for: {VPC.source_path}")
         logger.debug(f"[video_ffmpeg.video_HDR_extract] Metadata type: {VPC.HDR_type}")
         logger.debug(f"[video_ffmpeg.video_HDR_extract] Output paths - DoVi: {VPC.dovi_metadata_file}, HDR10+: {VPC.HDR10_metadata_file}")
 
@@ -413,7 +429,7 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
                 return False
 
         if VPC.HDR_type == "DoVi":
-            logger.info("[video_ffmpeg.video_HDR_extract] Extracting Dolby Vision RPU metadata")
+            logger.debug("[video_ffmpeg.video_HDR_extract] Extracting Dolby Vision RPU metadata")
             dovi_tool_path = os.path.join(VPC.tools_path, "dovi_tool.exe")
             dovi = [f"{dovi_tool_path}", "extract-rpu", "-i", f"{VPC.source_path}", "-o", f"{VPC.dovi_metadata_file}"]
             logger.debug(f"[video_ffmpeg.video_HDR_extract] DoVi extraction command: {' '.join(dovi)}")
@@ -427,7 +443,7 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
             return True
         
         elif VPC.HDR_type == "HDR10":
-            logger.info("[video_ffmpeg.video_HDR_extract] Extracting HDR10+ dynamic metadata")
+            logger.debug("[video_ffmpeg.video_HDR_extract] Extracting HDR10+ dynamic metadata")
             HDR10plus_tool_path = os.path.join(VPC.tools_path, "hdr10plus_tool.exe")
             HDR10plus = [f"{HDR10plus_tool_path}", "extract", f"{VPC.source_path}", "-o", f"{VPC.HDR10_metadata_file}"]
             logger.debug(f"[video_ffmpeg.video_HDR_extract] HDR10+ extraction command: {' '.join(HDR10plus)}")
@@ -468,18 +484,18 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
         """
             
 
-        logger.info(f"[video_ffmpeg.video_HDR_inject] Starting HDR metadata injection")
+        logger.debug(f"[video_ffmpeg.video_HDR_inject] Starting HDR metadata injection")
         logger.debug(f"[video_ffmpeg.video_HDR_inject] Source: {VPC.source_path} -> Target: {VPC.target_path}")
         logger.debug(f"[video_ffmpeg.video_HDR_inject] Metadata type: {VPC.HDR_type}")
         
         if VPC.HDR_type == "HDR10":
-            logger.info("[video_ffmpeg.video_HDR_inject] Injecting HDR10+ dynamic metadata")
+            logger.debug("[video_ffmpeg.video_HDR_inject] Injecting HDR10+ dynamic metadata")
             HDR10plus_tool_path = os.path.join(VPC.tools_path, "hdr10plus_tool.exe")
             command = [HDR10plus_tool_path, "inject", "-i", VPC.source_path, "-j", VPC.HDR10_metadata_file, "-o", VPC.target_path]
             logger.debug(f"[video_ffmpeg.video_HDR_inject] HDR10+ injection command: {' '.join(command)}")
 
         elif VPC.HDR_type == "DoVi":
-            logger.info("[video_ffmpeg.video_HDR_inject] Injecting Dolby Vision RPU metadata")
+            logger.debug("[video_ffmpeg.video_HDR_inject] Injecting Dolby Vision RPU metadata")
             dovi_tool_path = os.path.join(VPC.tools_path, "dovi_tool.exe")
             command = [dovi_tool_path, "inject-rpu", "-i", VPC.source_path, "--rpu-in", VPC.dovi_metadata_file, "-o", VPC.target_path]
             logger.debug(f"[video_ffmpeg.video_HDR_inject] DoVi injection command: {' '.join(command)}")
@@ -526,7 +542,7 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
             ValueError: If crop parameters result in invalid dimensions
             FileNotFoundError: If FFmpeg executable is not found
         """
-        logger.info(f"[video_ffmpeg.video_encode_ffmpeg] Starting FFmpeg video encoding")
+        logger.debug(f"[video_ffmpeg.video_encode_ffmpeg] Starting FFmpeg video encoding")
         logger.debug(f"[video_ffmpeg.video_encode_ffmpeg] Source: {VPC.source_path} -> Target: {VPC.target_path}")
         logger.debug(f"[video_ffmpeg.video_encode_ffmpeg] Encoding parameters - Target resolution: {VPC.output_res}, CQ: {VPC.output_cq}, Crop: {VPC.crop}")
 
@@ -567,11 +583,11 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
         command = command + command_append
 
         logger.debug(f"[video_ffmpeg.video_encode_ffmpeg] Complete FFmpeg command: {' '.join(command)}")
-        logger.info("[video_ffmpeg.video_encode_ffmpeg] Starting FFmpeg encoding process")
+        logger.debug("[video_ffmpeg.video_encode_ffmpeg] Starting FFmpeg encoding process")
 
         if execute(command):
             if check_output(VPC.target_path):
-                logger.info("[video_ffmpeg.video_encode_ffmpeg] FFmpeg encoding completed successfully")
+                logger.debug("[video_ffmpeg.video_encode_ffmpeg] FFmpeg encoding completed successfully")
                 return True
             else:
                 logger.error("[video_ffmpeg.video_encode_ffmpeg] Output file validation failed")
@@ -596,7 +612,7 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
         Returns:
             bool: True if conversion succeeded, False otherwise
         """
-        logger.info(f"[video_ffmpeg.hevc_to_mkv] Converting .hevc to .mkv")
+        logger.debug(f"[video_ffmpeg.hevc_to_mkv] Converting .hevc to .mkv")
         logger.debug(f"[video_ffmpeg.hevc_to_mkv] Source: {VPC.source_path} -> Target: {VPC.target_path}")
         
         mp4_name = VPC.target_path[:-4] + ".mp4"
@@ -642,11 +658,11 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
             return False
 
         logger.debug("[video_ffmpeg.hevc_to_mkv] Step 2 (MP4 to MKV) completed successfully")
-        logger.info("[video_ffmpeg.hevc_to_mkv] HEVC to MKV conversion completed successfully")
+        logger.debug("[video_ffmpeg.hevc_to_mkv] HEVC to MKV conversion completed successfully")
         return True
                 
     if VPC.profile["HDR_enable"][1]:
-        logger.info("[video_ffmpeg] HDR processing enabled - starting metadata workflow")
+        logger.debug("[video_ffmpeg] HDR processing enabled - starting metadata workflow")
 
         out = video_HDR_extract(VPC)
         # Extract HDR metadata from source file
@@ -674,8 +690,8 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
             
         else: 
             logger.error("[video_ffmpeg] HDR metadata extraction failed")
-
-            logger.info("[video_ffmpeg] Standard encoding mode (no HDR processing)")
+            VPC.DisableParentHDR()
+            logger.debug("[video_ffmpeg] Standard encoding mode (no HDR processing)")
             VPC.setTargetPath(VPC.output_file_path)
             if not video_encode_ffmpeg(VPC):
                 logger.error("[video_ffmpeg] Standard FFmpeg encoding failed")
@@ -684,13 +700,13 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
     else:
 
         # Standard encoding without HDR processing
-        logger.info("[video_ffmpeg] Standard encoding mode (no HDR processing)")
+        logger.debug("[video_ffmpeg] Standard encoding mode (no HDR processing)")
         VPC.setTargetPath(VPC.output_file_path)
         if not video_encode_ffmpeg(VPC):
             logger.error("[video_ffmpeg] Standard FFmpeg encoding failed")
             return False
 
-    logger.info("[video_ffmpeg] FFmpeg encoding workflow completed successfully")
+    logger.debug("[video_ffmpeg] FFmpeg encoding workflow completed successfully")
     return True
 
 

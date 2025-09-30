@@ -12,7 +12,9 @@ from VideoClass import VideoProcessingConfig
 
 def compressAV(VPC: VideoProcessingConfig) -> bool:
 
-    if not os.path.isfile(file):
+    logger = logging.getLogger("AppLogger")
+
+    if not os.path.isfile(VPC.orig_file_path):
         logger.error("file not found")
         return False
 
@@ -24,39 +26,41 @@ def compressAV(VPC: VideoProcessingConfig) -> bool:
     logger.debug('Profile values:')
     logger.debug(VPC.profile)
    
-    orig_file_size_GB = os.stat(file).st_size / (1024 * 1024 * 1024)
+    orig_file_size_GB = os.stat(VPC.orig_file_path).st_size / (1024 * 1024 * 1024)
     logger.info(f"Original file is {orig_file_size_GB:.3f}GB")
 
-    _ = runTests(VPC)
+    passed = runTests(VPC)
+    if not passed:
+        logger.info(f"Some tests Failed")
+    else:
+        logger.info(f"Tests finished succesfully")
 
-    result = compressor2.compress(VPC)
-    if not result:
-        return False
-
-    logger.info(f"Conversion finished succesfully")
-
-    output_file_size_GB = os.stat(VPC.output_file_path).st_size / (1024 * 1024 * 1024)
+    VPC.export_to_txt()
     
-    logger.info(f"Output file is {output_file_size_GB:.3f}GB")
-    logger.info(f"Output file is {(orig_file_size_GB/output_file_size_GB):.3f}x size of original")
+    if VPC.test_settings["Export_output"]["Enabled"]:
+        result = compressor2.compress(VPC)
+        if not result:
+            logger.info(f"Conversion failed")
+            return False
+        
+        output_file_size_GB = os.stat(VPC.output_file_path).st_size / (1024 * 1024 * 1024)
+        logger.info(f"Output file is {output_file_size_GB:.3f}GB")
+        logger.info(f"Output file is {(orig_file_size_GB/output_file_size_GB):.3f}x size of original")
 
+    else:
+        logger.info(f"Export output is disabled")
+
+    logger.info(f"Program finished succesfully")
     return True
 
+def init(file, file_name, profile_path, settings_path, workspaces, tools_path) -> tuple[VideoProcessingConfig, logging.Logger, logging.Logger]:
      
-
-if __name__ == '__main__':
-
-    file = r"E:\Filmy\hrané\Action\Lucy FHD.mkv"
-    file_name = "Lucy"
-    profile_path = r"Profiles\h265_slow_nvenc.yaml"
-    settings_path = r"Profiles\Test_settings.yaml"
-    workspace = r"D:\Files\Projects\AutoCompression\workspace\Lucy"
-    tools_path = r"D:\Files\Projects\AutoCompression\tools"
+    workspace = os.path.join(workspaces, file_name)
 
     if not os.path.exists(workspace):
-            # Create the directory
-            os.makedirs(workspace)
-            print(f'Directory "{workspace}" created.')
+        # Create the directory
+        os.makedirs(workspace)
+        print(f'Directory "{workspace}" created.')
 
     log_path = os.path.join(workspace, "app.log")
     logger = logger_setup.primary_logger(log_level=logging.INFO, log_file=log_path)
@@ -67,12 +71,42 @@ if __name__ == '__main__':
     VPC.readProfiles(profile_path, settings_path, tools_path)
     VPC.analyzeOriginal()
 
+    return VPC, logger, stream_logger
+     
 
-    passed = compressAV(VPC)
+if __name__ == '__main__':
+
+    profile_path = r"Profiles\h265_slow_nvenc.yaml"
+    settings_path = r"Profiles\Test_settings.yaml"
+    workspaces = r"D:\Files\Projects\AutoCompression\workspace"
+    tools_path = r"D:\Files\Projects\AutoCompression\tools"
+
+    test_files = {
+        r"E:\Filmy\hrané\Action\300 Bitva u Thermopyl HD.mkv": "300 Bitva u Thermopyl",
+        r"E:\Filmy\hrané\Action\Kingsman.avi": "Kingsman",
+        r"E:\Filmy\hrané\Action\The.Hitmans.Wifes.Bodyguard.2021.1080p.HDRip.X264-EVO.mkv": "The.Hitmans.Wifes.Bodyguard.2021.1080p.HDRip.X264-EVO",
+        r"E:\Filmy\hrané\Drama\Oppenheimer.2023.1080p.BluRay.x264.AAC5.1-[YTS.MX].mp4": "Oppenheimer",
+        r"E:\Filmy\hrané\Fantasy\Na hraně zítřka SD.avi": "Na hraně zítřka",
+        r"E:\Filmy\hrané\Fantasy\Harry Potter\Harry Potter 2 a Tajemná komnata HD.avi": "Harry Potter 2 a Tajemná komnata",
+        r"E:\Filmy\hrané\Super-heroes\Marvel\Iron Man 1 FHD 10bit HEVC (H.265) BDRip By HEaVenriC.mkv": "Iron man",
+        r"E:\Filmy\animované\Ledové království 2 UHD.mkv": "Ledové království 2",
+        r"E:\Filmy\animované\Turbo.cz.avi": "Turbo.cz",
+        r"E:\Filmy\animované\Toy-Story-3-cz.avi": "Toy-Story-3-cz",
+        r"E:\Filmy\4K\interstellar.2014.2160p.uhd.bluray.x265-terminal.mkv": "Interstellar",
+        r"E:\Filmy\4K\Red One.mkv": "Red One",
+        r"D:\Files\Projects\AutoCompression\Tests\DoVi.mkv": "DoVi",
+        r"D:\Files\Projects\AutoCompression\Tests\HDR10_plus.mkv": "HDR10_plus"
+        }
+
+    for key in test_files.keys():
+        VPC, logger, stream_logger = init(key, test_files[key], profile_path, settings_path, workspaces, tools_path)
+        passed = compressAV(VPC)
+        test_files[key] = str(passed)
+    
+    print(test_files)
 
     """TODO:
-        .avi doesnt support fast seek (videos in _res have random length)
-        do HDR workflow onlz with HEVC
+
         audio
         subtitles
         Edit log messages
@@ -82,4 +116,5 @@ if __name__ == '__main__':
         delete VMAFlog.json after execution of vmaf
         fix output size calculation/comparison mesage
         Documentation - doxygen
+
     """

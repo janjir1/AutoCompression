@@ -5,9 +5,10 @@ import compressor2
 import yaml
 import subprocess
 import json
-import logger_setup
+import copy
 import logging
 from fractions import Fraction
+import weakref
 
 logger = logging.getLogger("AppLogger")
 
@@ -44,6 +45,7 @@ class VideoProcessingConfig:
         self.output_file_name = output_file_name
         self.workspace = workspace
         self.output_file_path = os.path.join(self.workspace, self.output_file_name) + ".mkv"   
+        self.parent = None
 
         if not os.path.exists(workspace):
             os.makedirs(workspace)
@@ -84,10 +86,29 @@ class VideoProcessingConfig:
         self.orig_v_res = getV_res(self.orig_file_path)
         self.orig_framerate = get_framerate(self.orig_file_path)
         self.orig_duration = getDuration(self.orig_file_path)
+        self.FS_support = get_fast_seek_support(self.orig_file_path)
+        self.is_H265 = is_h265(self.orig_file_path)
+        if not self.is_H265:
+            self.profile["HDR_enable"][1] = False
+            logger.info(f"[VideoProcessingConfig.analyzeOriginal] File is not h265 disabling HDR")
+
         self.target_res = self.orig_h_res
         self.output_res = self.orig_h_res
-        self.orig_container = None
-        self.orig_codec = None
+
+    def create_copy(self):
+        """Create a deepcopy that remembers its parent."""
+        new_copy = copy.deepcopy(self)
+        new_copy.parent = self  # Child remembers parent
+        return new_copy
+    
+    def DisableParentHDR(self):
+        parent = self.parent
+        while True:
+            if parent is None:
+                logger.debug("Original parent")
+                break 
+            parent.profile["HDR_enable"][1] = False
+            parent = parent.parent
 
     def setTargetPath(self, name: str):
         self.target_path = name
@@ -135,6 +156,36 @@ class VideoProcessingConfig:
             The value following the specified key
         """
         return lst[lst.index(word)+1]
+    
+    def export_to_txt(self):
+        """
+        Export all attributes of this VideoProcessingConfig instance to a text file.
+
+        Each line is either “attribute: value” for simple attrs, or
+        dict entries for profile and settings if present.
+        """
+
+        lines = []
+        # Dump all simple attributes
+        for attr, val in vars(self).items():
+            lines.append(f"{attr}: {val}")
+
+        # Dump profile dict if exists
+        if hasattr(self, "profile") and isinstance(self.profile, dict):
+            lines.append("\n# profile settings")
+            for k, v in self.profile.items():
+                lines.append(f"profile[{k}]: {v}")
+
+        # Dump settings dict if exists
+        if hasattr(self, "settings") and isinstance(self.test_settings, dict):
+            lines.append("\n# test_settings")
+            for k, v in self.test_settings.items():
+                lines.append(f"settings[{k}]: {v}")
+
+        # Write out
+        text_output_path = os.path.join(self.workspace, "VPC.txt")
+        with open(text_output_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
 
 
 def readProfile(yaml_profile):
@@ -386,3 +437,81 @@ def get_framerate(input_file):
     
     logger.error(f"[get_framerate] Framerate detection failed")
     return False
+
+def get_fast_seek_support(file_path: str, scan_bytes: int = 1_048_576) -> bool:
+    """
+    Determine whether a media file supports fast seek (HTTP byte‐range seeking).
+
+    For MP4-family files, “moov” atom must precede “mdat” atom.
+    For Matroska (MKV), the EBML “Cues” element (ID 0x1C53BB6B) must precede the first “Cluster” element (ID 0x1F43B675).
+
+    Args:
+        file_path: Path to the media file.
+        scan_bytes: Number of initial bytes to scan (default 1 MB).
+
+    Returns:
+        True if the container’s index/meta atom appears before bulk media data; False otherwise.
+    """
+    ext = os.path.splitext(file_path)[1].lower()
+    try:
+        with open(file_path, "rb") as f:
+            data = f.read(scan_bytes)
+    except (OSError, IOError):
+        return False
+
+    if ext in (".mp4", ".m4v", ".mov", ".mp4v", ".ismv"):
+        idx_index = data.find(b"moov")
+        idx_data  = data.find(b"mdat")
+    elif ext == ".mkv":
+        # EBML IDs for Matroska:
+        #   Cues    -> 0x1C53BB6B
+        #   Cluster -> 0x1F43B675
+        cues_id    = b"\x1C\x53\xBB\x6B"
+        cluster_id = b"\x1F\x43\xB6\x75"
+        idx_index = data.find(cues_id)
+        idx_data  = data.find(cluster_id)
+    else:
+        # Unsupported container: assume no fast seek
+        return False
+
+    # Both index/meta and data must be present
+    if idx_index == -1 or idx_data == -1:
+        return False
+
+    # Fast‐seek if index/meta precedes bulk media
+    return idx_index < idx_data
+
+def is_h265(file_path: str, ffprobe_path: str = "ffprobe") -> bool:
+    """
+    Check whether the given video files primary video stream uses H.265/HEVC.
+
+    Args:
+        file_path: Path to the input video file.
+        ffprobe_path: Path to the ffprobe executable (default: "ffprobe").
+
+    Returns:
+        True if the first video streams codec is "hevc"; False otherwise.
+    """
+    # Build ffprobe command to get stream codec information in JSON
+    cmd = [
+        ffprobe_path,
+        "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=codec_name",
+        "-of", "json",
+        file_path
+    ]
+
+    try:
+        # Run ffprobe and parse JSON output
+        proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        info = json.loads(proc.stdout)
+    except (subprocess.CalledProcessError, json.JSONDecodeError):
+        return False
+
+    streams = info.get("streams", [])
+    if not streams:
+        return False
+
+    codec = streams[0].get("codec_name", "").lower()
+    return codec == "hevc"
