@@ -45,7 +45,10 @@ Pipfile.lock
 *.$*
 VMAFlog.json
 
-#Archive and VQA
+#My
 Archive/
 FastVQA-and-FasterVQA/
-
+*.log
+workspace/
+tools/
+Tests/
