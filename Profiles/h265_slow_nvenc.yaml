@@ -4,12 +4,15 @@ function:
 
 #Enable HDR only for h265 (HEVC)
 HDR_enable:
- -HDR_enable: false
- 
+ -HDR_enable: true
+
+FS_enable: 
+ -FS_enable: true
+
 # Video settings
 video:
  -c:v: hevc_nvenc         # Video codec: NVENC HEVC
- -preset: slow            # Encoding preset: slow for better quality
+ -preset: fast            # Encoding preset: slow for better quality #slow
 # -tune: uhq               # Ultra High Quality tuning
 # -g: 120                  # Group of Pictures size
 # -bf: 4                   # Number of B-frames
@@ -46,3 +49,4 @@ test_settings:
   1920: !!float -6.9e-05
   3840: !!float -3e-05
  defalut_cq: 26
+ 

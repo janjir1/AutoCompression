@@ -78,7 +78,7 @@ if __name__ == '__main__':
 
     profile_path = r"Profiles\h265_slow_nvenc.yaml"
     settings_path = r"Profiles\Test_settings.yaml"
-    workspaces = r"D:\Files\Projects\AutoCompression\workspaceForFailed"
+    workspaces = r"D:\Files\Projects\AutoCompression\workspace"
     tools_path = r"D:\Files\Projects\AutoCompression\tools"
 
     test_files = {

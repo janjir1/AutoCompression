@@ -47,8 +47,8 @@ def search_logs_for_expression(root_folder, expression="average slope is:"):
 # Example usage:
 if __name__ == "__main__":
     # Replace with your actual folder path
-    folder_path = r"D:\Files\Projects\AutoCompression\workspaceForFailed"  # Current directory - change this to your target folder
-    expression = "VQA"
+    folder_path = r"D:\Files\Projects\AutoCompression\workspace"  # Current directory - change this to your target folder
+    expression = "Failed"
     
     print(f"Searching for '{expression}' in all app.log files...")
     print(f"Root folder: {os.path.abspath(folder_path)}")
