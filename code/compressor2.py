@@ -211,7 +211,7 @@ def check_output(file_path: str, size_limit=2048) -> bool:
         return False
 
 
-def temporal_crop(VPC: VideoProcessingConfig) -> bool:
+def temporal_crop(VPC: VideoProcessingConfig, NoFS_offset: int = 3) -> bool:
 
     """
     Perform temporal cropping (time-based cutting) of video files using FFmpeg.
@@ -252,7 +252,7 @@ def temporal_crop(VPC: VideoProcessingConfig) -> bool:
             "-avoid_negative_ts", "make_zero",                 # Shift any negative DTS to zero
             "-i", VPC.source_path,  # Input file
             "-ss", str(VPC.start),  # Start time
-            "-t", str(VPC.duration*3),  # Duration
+            "-t", str(VPC.duration + NoFS_offset),  # Duration
         ]
 
     command = command + [   
@@ -269,7 +269,11 @@ def temporal_crop(VPC: VideoProcessingConfig) -> bool:
             return True
         else:
             logger.error(f"[temporal_crop] Output file validation failed")
-            return False
+            if NoFS_offset >= 9:
+                return False
+            logger.debug(f"[temporal_crop] Atemting to create longer file")
+            return temporal_crop(VPC, NoFS_offset + 1)
+            
     else:
         logger.error(f"[temporal_crop] FFmpeg execution failed")
         return False

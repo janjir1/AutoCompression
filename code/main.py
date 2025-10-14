@@ -78,24 +78,13 @@ if __name__ == '__main__':
 
     profile_path = r"Profiles\h265_slow_nvenc.yaml"
     settings_path = r"Profiles\Test_settings.yaml"
-    workspaces = r"D:\Files\Projects\AutoCompression\workspace"
+    workspaces = r"D:\Files\Projects\AutoCompression\workspaceForFailed"
     tools_path = r"D:\Files\Projects\AutoCompression\tools"
 
     test_files = {
-        r"E:\Filmy\hrané\Action\300 Bitva u Thermopyl HD.mkv": "300 Bitva u Thermopyl",
         r"E:\Filmy\hrané\Action\Kingsman.avi": "Kingsman",
-        r"E:\Filmy\hrané\Action\The.Hitmans.Wifes.Bodyguard.2021.1080p.HDRip.X264-EVO.mkv": "The.Hitmans.Wifes.Bodyguard.2021.1080p.HDRip.X264-EVO",
         r"E:\Filmy\hrané\Drama\Oppenheimer.2023.1080p.BluRay.x264.AAC5.1-[YTS.MX].mp4": "Oppenheimer",
-        r"E:\Filmy\hrané\Fantasy\Na hraně zítřka SD.avi": "Na hraně zítřka",
-        r"E:\Filmy\hrané\Fantasy\Harry Potter\Harry Potter 2 a Tajemná komnata HD.avi": "Harry Potter 2 a Tajemná komnata",
-        r"E:\Filmy\hrané\Super-heroes\Marvel\Iron Man 1 FHD 10bit HEVC (H.265) BDRip By HEaVenriC.mkv": "Iron man",
-        r"E:\Filmy\animované\Ledové království 2 UHD.mkv": "Ledové království 2",
-        r"E:\Filmy\animované\Turbo.cz.avi": "Turbo.cz",
-        r"E:\Filmy\animované\Toy-Story-3-cz.avi": "Toy-Story-3-cz",
-        r"E:\Filmy\4K\interstellar.2014.2160p.uhd.bluray.x265-terminal.mkv": "Interstellar",
-        r"E:\Filmy\4K\Red One.mkv": "Red One",
-        r"D:\Files\Projects\AutoCompression\Tests\DoVi.mkv": "DoVi",
-        r"D:\Files\Projects\AutoCompression\Tests\HDR10_plus.mkv": "HDR10_plus"
+        r"E:\Filmy\animované\Toy-Story-3-cz.avi": "Toy-Story-3-cz"
         }
 
     for key in test_files.keys():
@@ -106,7 +95,8 @@ if __name__ == '__main__':
     print(test_files)
 
     """TODO:
-
+        Copy all metadata even static HDR10
+        for non FS multiply by 3 for only 1s (set 3s as minimum)
         audio
         subtitles
         Edit log messages

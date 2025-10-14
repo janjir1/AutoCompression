@@ -111,6 +111,8 @@ def getRes_parallel(VPC: VideoProcessingConfig) -> bool: #enter full path to vid
         result_dict = dict(shared_dict)
     
     #make output dict more readable and average the VQA values for each res
+    logger.debug("VQA process finished sucefully")
+
     if len(result_dict) < 2:
         logger.error("result us empty")
         return False
