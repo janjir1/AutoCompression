@@ -82,10 +82,10 @@ class VideoProcessingConfig:
         """
         logger.info(f"[VideoProcessingConfig.analyzeOriginal] Analyzing original video file: {self.orig_file_path}")
 
-        self.orig_h_res = getH_res(self.orig_file_path)
-        self.orig_v_res = getV_res(self.orig_file_path)
-        self.orig_framerate = get_framerate(self.orig_file_path)
-        self.orig_duration = getDuration(self.orig_file_path)
+        self.orig_h_res = getH_res(self.orig_file_path, self.tools_path)
+        self.orig_v_res = getV_res(self.orig_file_path, self.tools_path)
+        self.orig_framerate = get_framerate(self.orig_file_path, self.tools_path)
+        self.orig_duration = getDuration(self.orig_file_path, self.tools_path)
         self.FS_support = get_fast_seek_support(self.orig_file_path)
         self.is_H265 = is_h265(self.orig_file_path)
         if not self.is_H265:
@@ -249,7 +249,7 @@ def readSettings(yaml_settings):
 
     return settings
 
-def getDuration(input_path: str) -> float:
+def getDuration(input_path: str, tools_path) -> float:
     """
     Retrieve the duration of a video file using FFprobe.
     Args:
@@ -261,7 +261,7 @@ def getDuration(input_path: str) -> float:
 
     # Run ffprobe to get video information in JSON format
     command = [
-        'ffprobe',
+        os.path.join(tools_path, "ffprobe.exe"),
         '-v', 'error',                         # Suppress non-error messages
         '-show_entries', 'format=duration',    # Extract duration
         '-of', 'json',                         # Output format as JSON
@@ -297,7 +297,7 @@ def getDuration(input_path: str) -> float:
 
     return 0
 
-def getH_res(video_path: str) -> int:
+def getH_res(video_path: str, tools_path) -> int:
 
     """
     Retrieves the horizontal resolution (width) of a video file using FFprobe.
@@ -311,7 +311,7 @@ def getH_res(video_path: str) -> int:
     logger.debug(f"[getH_res] Getting horizontal resolution for: {video_path}")
     # ffprobe command to get the stream info in JSON format
     command = [
-        "ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+        f"{os.path.join(tools_path, "ffprobe.exe")}", "-v", "error", "-select_streams", "v:0", "-show_entries",
         "stream=width", "-of", "json", video_path
     ]
     logger.debug(f"[getH_res] FFprobe command: {' '.join(command)}")
@@ -342,7 +342,7 @@ def getH_res(video_path: str) -> int:
 
     return 0
     
-def getV_res(video_path: str) -> int:
+def getV_res(video_path: str, tools_path) -> int:
     """
     Retrieves the vertical resolution (height) of a video file using FFprobe.
 
@@ -357,7 +357,7 @@ def getV_res(video_path: str) -> int:
 
     # ffprobe command to get the stream info in JSON format
     command = [
-        "ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+        f"{os.path.join(tools_path, "ffprobe.exe")}", "-v", "error", "-select_streams", "v:0", "-show_entries",
         "stream=height", "-of", "json", video_path
     ]
 
@@ -388,7 +388,7 @@ def getV_res(video_path: str) -> int:
         logger.error(f"[getV_res] Unexpected error while retrieving resolution for {video_path}: {e}")
     return 0
 
-def get_framerate(input_file):
+def get_framerate(input_file, tools_path):
     """
     Retrieve the video framerate using ffprobe, supporting both CFR and VFR.
     Args:
@@ -398,9 +398,9 @@ def get_framerate(input_file):
     """
     logger.debug(f"[get_framerate] Getting framerate for: {input_file}")
 
-    def probe(entry: str) -> str:
+    def probe(entry: str, tools_path) -> str:
         cmd = [
-            "ffprobe", "-v", "error",
+            f"{os.path.join(tools_path, "ffprobe.exe")}", "-v", "error",
             "-select_streams", "v:0",
             f"-show_entries", f"stream={entry}",
             "-of", "default=noprint_wrappers=1:nokey=1",
@@ -420,7 +420,7 @@ def get_framerate(input_file):
 
 
     # Try constant-frame-rate
-    raw = probe("r_frame_rate")
+    raw = probe("r_frame_rate", tools_path)
     logger.debug(f"[get_framerate] Probe r_frame_rate: {raw}")  # Logging probe output[2]
     framerate_local = ffprobe_framerate_to_float(raw)
     logger.debug(f"[get_framerate] Probe r_frame_rate: {framerate_local}")  # Logging probe output[2]
@@ -428,7 +428,7 @@ def get_framerate(input_file):
         return framerate_local
 
     # Fallback to variable-frame-rate
-    raw = probe("avg_frame_rate")
+    raw = probe("avg_frame_rate", tools_path)
     logger.debug(f"[get_framerate] Probe avg_frame_rate: {raw}")  # Fallback probe logging[2]
     framerate_local = ffprobe_framerate_to_float(raw)
     logger.debug(f"[get_framerate] Probe r_frame_rate: {framerate_local}")  # Logging probe output[2]
