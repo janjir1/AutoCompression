@@ -1,12 +1,9 @@
-from gc import enable
-from sympy import li
-import yaml
 from AVTest import runTests
 import logging
 import logger_setup
-import os, subprocess, traceback
-import json
+import os
 import compressor2
+import argparse
 from VideoClass import VideoProcessingConfig
 
 
@@ -72,27 +69,34 @@ def init(file, file_name, profile_path, settings_path, workspaces, tools_path) -
     VPC.analyzeOriginal()
 
     return VPC, logger, stream_logger
+
      
 
 if __name__ == '__main__':
 
-    profile_path = r"Profiles\h265_slow_nvenc.yaml"
-    settings_path = r"Profiles\Test_settings.yaml"
-    workspaces = r"D:\Files\Projects\AutoCompression\workspace"
-    tools_path = r"D:\Files\Projects\AutoCompression\tools"
 
-    test_files = {
-        r"E:\Filmy\hrané\Action\Kingsman.avi": "Kingsman",
-        r"E:\Filmy\hrané\Drama\Oppenheimer.2023.1080p.BluRay.x264.AAC5.1-[YTS.MX].mp4": "Oppenheimer",
-        r"E:\Filmy\animované\Toy-Story-3-cz.avi": "Toy-Story-3-cz"
-        }
+    parser = argparse.ArgumentParser(
+        description='Run auto‐compression for a single movie file.'
+    )
+    parser.add_argument('--input_file',   '-i', required=True,
+                        help='Path to the source video file.')
+    parser.add_argument('--movie_name',   '-n', required=True,
+                        help='Identifier or title for logging.')
+    parser.add_argument('--profile',      '-p', required=True,
+                        help='Path to the FFmpeg profile YAML.')
+    parser.add_argument('--settings',     '-s', required=True,
+                        help='Path to the settings YAML.')
+    parser.add_argument('--workspace',    '-w', required=True,
+                        help='Base workspace directory.')
+    parser.add_argument('--tools',        '-t', required=True,
+                        help='Directory containing external tools.')
 
-    for key in test_files.keys():
-        VPC, logger, stream_logger = init(key, test_files[key], profile_path, settings_path, workspaces, tools_path)
-        passed = compressAV(VPC)
-        test_files[key] = str(passed)
-    
-    print(test_files)
+    args = parser.parse_args()
+
+    VPC, logger, stream_logger = init(args.input_file, args.movie_name, args.profile, args.settings, args.workspace, args.tools)
+    passed = compressAV(VPC)
+
+    print(passed)
 
     """TODO:
         Copy all metadata even static HDR10
