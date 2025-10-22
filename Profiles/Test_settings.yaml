@@ -34,3 +34,6 @@ Channels_calculation:
 
 Export_output:
   Enabled: false
+
+Enable_delete:
+  Enabled: true

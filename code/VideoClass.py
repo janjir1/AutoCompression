@@ -81,7 +81,7 @@ class VideoProcessingConfig:
         Analyze the original video file to extract metadata such as resolution, framerate, and duration.
         """
         logger.info(f"[VideoProcessingConfig.analyzeOriginal] Analyzing original video file: {self.orig_file_path}")
-
+        print(self.tools_path)
         self.orig_h_res = getH_res(self.orig_file_path, self.tools_path)
         self.orig_v_res = getV_res(self.orig_file_path, self.tools_path)
         self.orig_framerate = get_framerate(self.orig_file_path, self.tools_path)
@@ -261,7 +261,7 @@ def getDuration(input_path: str, tools_path) -> float:
 
     # Run ffprobe to get video information in JSON format
     command = [
-        os.path.join(tools_path, "ffprobe.exe"),
+        os.path.join(tools_path, "ffprobe"),
         '-v', 'error',                         # Suppress non-error messages
         '-show_entries', 'format=duration',    # Extract duration
         '-of', 'json',                         # Output format as JSON
@@ -311,7 +311,7 @@ def getH_res(video_path: str, tools_path) -> int:
     logger.debug(f"[getH_res] Getting horizontal resolution for: {video_path}")
     # ffprobe command to get the stream info in JSON format
     command = [
-        f"{os.path.join(tools_path, "ffprobe.exe")}", "-v", "error", "-select_streams", "v:0", "-show_entries",
+        f"{os.path.join(tools_path, "ffprobe")}", "-v", "error", "-select_streams", "v:0", "-show_entries",
         "stream=width", "-of", "json", video_path
     ]
     logger.debug(f"[getH_res] FFprobe command: {' '.join(command)}")
@@ -357,7 +357,7 @@ def getV_res(video_path: str, tools_path) -> int:
 
     # ffprobe command to get the stream info in JSON format
     command = [
-        f"{os.path.join(tools_path, "ffprobe.exe")}", "-v", "error", "-select_streams", "v:0", "-show_entries",
+        f"{os.path.join(tools_path, "ffprobe")}", "-v", "error", "-select_streams", "v:0", "-show_entries",
         "stream=height", "-of", "json", video_path
     ]
 
@@ -400,7 +400,7 @@ def get_framerate(input_file, tools_path):
 
     def probe(entry: str, tools_path) -> str:
         cmd = [
-            f"{os.path.join(tools_path, "ffprobe.exe")}", "-v", "error",
+            f"{os.path.join(tools_path, "ffprobe")}", "-v", "error",
             "-select_streams", "v:0",
             f"-show_entries", f"stream={entry}",
             "-of", "default=noprint_wrappers=1:nokey=1",

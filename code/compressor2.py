@@ -1,5 +1,5 @@
 from encodings.punycode import T
-import re
+import shutil
 import subprocess, os, json
 import logging
 
@@ -98,7 +98,6 @@ def execute(command: list) -> bool:
         command,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        bufsize=1,  # Line-buffered mode
         universal_newlines=False  # Handle decoding manually
     )
 
@@ -145,7 +144,6 @@ def execute(command: list) -> bool:
 
                 # Log and update last line
                 if stream_type == "STDOUT":
-                    print(decoded_line)
                     file_log.debug(f"[{stream_type}] {decoded_line}")
                 elif stream_type == "STDERR":
                     file_log.debug(f"[{stream_type}] {decoded_line}")
@@ -370,7 +368,7 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
 
             # Try Dolby Vision first
             logger.debug("[video_ffmpeg.get_video_metadata_type] Attempting Dolby Vision metadata extraction")
-            dovi_tool_path = os.path.join(VPC.tools_path, "dovi_tool.exe")
+            dovi_tool_path = os.path.join(VPC.tools_path, "dovi_tool")
             dovi = [f"{dovi_tool_path}", "extract-rpu", "-i", f"{VPC.source_path}", "-o", f"{VPC.dovi_metadata_file}"]
             logger.debug(f"[video_ffmpeg.get_video_metadata_type] DoVi extraction command: {' '.join(dovi)}")
 
@@ -386,7 +384,7 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
             else:
                 # Try HDR10+ as fallback
                 logger.debug("[video_ffmpeg.get_video_metadata_type] Dolby Vision not detected, attempting HDR10+ metadata extraction")
-                HDR10plus_tool_path = os.path.join(VPC.tools_path, "hdr10plus_tool.exe")
+                HDR10plus_tool_path = os.path.join(VPC.tools_path, "hdr10plus_tool")
                 HDR10plus = [f"{HDR10plus_tool_path}", "extract", f"{VPC.source_path}", "-o", f"{VPC.HDR10_metadata_file}"]
                 logger.debug(f"[video_ffmpeg.get_video_metadata_type] HDR10+ extraction command: {' '.join(HDR10plus)}")
 
@@ -434,7 +432,7 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
 
         if VPC.HDR_type == "DoVi":
             logger.debug("[video_ffmpeg.video_HDR_extract] Extracting Dolby Vision RPU metadata")
-            dovi_tool_path = os.path.join(VPC.tools_path, "dovi_tool.exe")
+            dovi_tool_path = os.path.join(VPC.tools_path, "dovi_tool")
             dovi = [f"{dovi_tool_path}", "extract-rpu", "-i", f"{VPC.source_path}", "-o", f"{VPC.dovi_metadata_file}"]
             logger.debug(f"[video_ffmpeg.video_HDR_extract] DoVi extraction command: {' '.join(dovi)}")
 
@@ -448,7 +446,7 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
         
         elif VPC.HDR_type == "HDR10":
             logger.debug("[video_ffmpeg.video_HDR_extract] Extracting HDR10+ dynamic metadata")
-            HDR10plus_tool_path = os.path.join(VPC.tools_path, "hdr10plus_tool.exe")
+            HDR10plus_tool_path = os.path.join(VPC.tools_path, "hdr10plus_tool")
             HDR10plus = [f"{HDR10plus_tool_path}", "extract", f"{VPC.source_path}", "-o", f"{VPC.HDR10_metadata_file}"]
             logger.debug(f"[video_ffmpeg.video_HDR_extract] HDR10+ extraction command: {' '.join(HDR10plus)}")
 
@@ -494,13 +492,13 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
         
         if VPC.HDR_type == "HDR10":
             logger.debug("[video_ffmpeg.video_HDR_inject] Injecting HDR10+ dynamic metadata")
-            HDR10plus_tool_path = os.path.join(VPC.tools_path, "hdr10plus_tool.exe")
+            HDR10plus_tool_path = os.path.join(VPC.tools_path, "hdr10plus_tool")
             command = [HDR10plus_tool_path, "inject", "-i", VPC.source_path, "-j", VPC.HDR10_metadata_file, "-o", VPC.target_path]
             logger.debug(f"[video_ffmpeg.video_HDR_inject] HDR10+ injection command: {' '.join(command)}")
 
         elif VPC.HDR_type == "DoVi":
             logger.debug("[video_ffmpeg.video_HDR_inject] Injecting Dolby Vision RPU metadata")
-            dovi_tool_path = os.path.join(VPC.tools_path, "dovi_tool.exe")
+            dovi_tool_path = os.path.join(VPC.tools_path, "dovi_tool")
             command = [dovi_tool_path, "inject-rpu", "-i", VPC.source_path, "--rpu-in", VPC.dovi_metadata_file, "-o", VPC.target_path]
             logger.debug(f"[video_ffmpeg.video_HDR_inject] DoVi injection command: {' '.join(command)}")
 
@@ -600,9 +598,7 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
             return False
         
         #Enable HDR only for h265
-    
-    
-                
+             
     def hevc_to_mkv(VPC: VideoProcessingConfig):
         """
         Convert HEVC elementary stream to MKV container format.
@@ -643,6 +639,7 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
             return False
 
         logger.debug("[video_ffmpeg.hevc_to_mkv] Step 1 (HEVC to MP4) completed successfully")
+        
 
         # Step 2: Convert MP4 to MKV
         command = [
@@ -663,6 +660,7 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
 
         logger.debug("[video_ffmpeg.hevc_to_mkv] Step 2 (MP4 to MKV) completed successfully")
         logger.debug("[video_ffmpeg.hevc_to_mkv] HEVC to MKV conversion completed successfully")
+        delete_file(VPC, mp4_name)
         return True
                 
     if VPC.profile["HDR_enable"][1]:
@@ -677,6 +675,7 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
             if not video_encode_ffmpeg(VPC):
                 logger.error("[video_ffmpeg] FFmpeg encoding failed")
                 return False
+            delete_file(VPC, VPC.source_path)
 
             # Inject HDR metadata into encoded file
             VPC.setSourcePath(VPC.target_path)
@@ -684,6 +683,8 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
             if not video_HDR_inject(VPC):
                 logger.error("[video_ffmpeg] HDR metadata injection failed")
                 return False
+
+            delete_file(VPC, VPC.source_path)
             VPC.setSourcePath(VPC.target_path)
 
             # Convert final HEVC to MKV container
@@ -691,6 +692,7 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
             if not hevc_to_mkv(VPC):
                 logger.error("[video_ffmpeg] HEVC to MKV conversion failed")
                 return False
+            delete_file(VPC, VPC.source_path)
             
         else: 
             logger.error("[video_ffmpeg] HDR metadata extraction failed")
@@ -700,6 +702,7 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
             if not video_encode_ffmpeg(VPC):
                 logger.error("[video_ffmpeg] Standard FFmpeg encoding failed")
                 return False
+            delete_file(VPC, VPC.source_path)
 
     else:
 
@@ -709,10 +712,23 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
         if not video_encode_ffmpeg(VPC):
             logger.error("[video_ffmpeg] Standard FFmpeg encoding failed")
             return False
+        delete_file(VPC, VPC.source_path)
 
     logger.debug("[video_ffmpeg] FFmpeg encoding workflow completed successfully")
     return True
 
+def delete_file(VPC, file: str) -> None:
+    if VPC.test_settings["Enable_delete"]["Enabled"]:
+        logger.debug(f"[delete_file] Deleting: {file}")
+        
+        if os.path.isfile(file):
+            os.remove(file)
+            logger.debug(f"[delete_file] Deleted file: {file}")
+        elif os.path.isdir(file):
+            shutil.rmtree(file)
+            logger.debug(f"[delete_file] Deleted directory: {file}")
+        else:
+            logger.warning(f"[delete_file] Path does not exist: {file}")
 
 if __name__ == '__main__':
 

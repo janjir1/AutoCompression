@@ -1,0 +1,47 @@
+services:
+  # Production service - runs your script automatically
+  # server:
+  #   build:
+  #     context: .
+  #   ports:
+  #     - 8000:8000
+  #   volumes:
+  #     - ${INPUT_PATH:-./input}:/input
+  #     - ${WORKSPACE_PATH:-./workspace}:/workspace
+  #   command: >
+  #     -i ${INPUT_FILE:-/input/DoVi.mkv}
+  #     -n ${OUTPUT_NAME:-DoVi}
+  #     -w /workspace
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: all
+  #             capabilities: [gpu]
+  #   stdin_open: true
+  #   tty: true
+  #   profiles:
+  #     - production
+
+  # Development service - keeps container running for VS Code
+  dev:
+    build:
+      context: .
+    ports:
+      - 8000:8000
+    volumes:
+      - ./input:/input
+      - ./workspace:/workspace
+      - ./code:/app/code:cached
+      - ./Profiles:/app/Profiles:cached
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    stdin_open: true
+    tty: true
+    entrypoint: "sh /app/code/entrypoint.sh"

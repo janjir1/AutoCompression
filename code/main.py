@@ -100,12 +100,11 @@ if __name__ == '__main__':
 
     """TODO:
         Copy all metadata even static HDR10
-        for non FS multiply by 3 for only 1s (set 3s as minimum)
+        
         audio
         subtitles
         Edit log messages
         Logger doesnt work in multithreading
-        Output calculated things and settings to a file
         Include metadata for windows (length, resolution)
         delete VMAFlog.json after execution of vmaf
         fix output size calculation/comparison mesage

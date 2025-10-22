@@ -177,6 +177,7 @@ def getRes_parallel(VPC: VideoProcessingConfig) -> bool: #enter full path to vid
 
     logger.info(f"Original resolution: {VPC.orig_h_res}, Target resolution: {target_res}")
     VPC.setOutputRes(target_res)
+    compressor2.delete_file(VPC, res_VPC.workspace)
     return True
 
 def _run_VQA_process(video_path: str, shared_dict: dict, lock) -> int:
@@ -474,6 +475,8 @@ def getCQ(VPC: VideoProcessingConfig) -> bool:
     
     logger.info(f"Calculated CQ: {target_cq}")
     VPC.setOutputCQ(target_cq)
+
+    compressor2.delete_file(VPC, cq_VPC.workspace)
     return True
 
 #endregion
@@ -680,6 +683,7 @@ def detectBlackbars(VPC: VideoProcessingConfig) -> bool:
         logger.info("No black bars detected")
 
     VPC.crop = [black_top_result, black_bottom_result]
+    compressor2.delete_file(VPC, blackbars_VPC.workspace)
     return True
 
 def exportFrame(VPC: VideoProcessingConfig, target_name_path: str, time: int, png_quality: int = 2) -> None:
@@ -703,7 +707,7 @@ def exportFrame(VPC: VideoProcessingConfig, target_name_path: str, time: int, pn
     # -update 1 overwrites the file if it exists,
     # -y forces overwriting without prompting.
     command = [
-        os.path.join(VPC.tools_path, "ffmpeg.exe"),
+        os.path.join(VPC.tools_path, "ffmpeg"),
         "-ss", str(time),
         "-i", VPC.orig_file_path,
         "-frames:v", "1",

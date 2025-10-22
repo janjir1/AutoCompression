@@ -1,0 +1,21 @@
+{
+    "name": "AutoCompression",
+    "dockerComposeFile": "../compose.yaml",
+    "service": "dev",
+    "workspaceFolder": "/app",
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-python.python",
+                "ms-python.vscode-pylance",
+                "ms-python.debugpy"
+            ],
+            "settings": {
+                "python.defaultInterpreterPath": "/usr/bin/python3.12",
+                "python.linting.enabled": true,
+                "python.formatting.provider": "autopep8"
+            }
+        }
+    },
+    "remoteUser": "root"
+}
