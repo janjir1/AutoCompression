@@ -37,7 +37,8 @@ WORKDIR /tmp/vmaf-build
 RUN apt-get update && apt-get install -y meson ninja-build xxd && \
     git clone --depth 1 https://github.com/Netflix/vmaf.git && \
     cd vmaf/libvmaf && \
-    meson setup build --buildtype=release --prefix=/usr/local && \
+    meson setup build --buildtype=release --prefix=/usr/local \
+      -Dc_link_args='-lstdc++' && \
     ninja -C build && \
     ninja -C build install && \
     ldconfig && \
@@ -133,4 +134,9 @@ COPY Profiles ./Profiles
 COPY code ./code
 
 EXPOSE 8000
-ENTRYPOINT ["ls /app"]
+#ENTRYPOINT ["ls /app"]
+
+RUN chmod +x ./code/entrypoint.sh
+
+ENTRYPOINT ["./code/entrypoint.sh"]
+CMD ["--help"]

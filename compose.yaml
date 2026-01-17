@@ -1,40 +1,35 @@
 services:
-  # Production service - runs your script automatically
-  # server:
-  #   build:
-  #     context: .
-  #   ports:
-  #     - 8000:8000
-  #   volumes:
-  #     - ${INPUT_PATH:-./input}:/input
-  #     - ${WORKSPACE_PATH:-./workspace}:/workspace
-  #   command: >
-  #     -i ${INPUT_FILE:-/input/DoVi.mkv}
-  #     -n ${OUTPUT_NAME:-DoVi}
-  #     -w /workspace
-  #   deploy:
-  #     resources:
-  #       reservations:
-  #         devices:
-  #           - driver: nvidia
-  #             count: all
-  #             capabilities: [gpu]
-  #   stdin_open: true
-  #   tty: true
-  #   profiles:
-  #     - production
+  # One-shot CLI runner (run with args, then exit)
+  cli:
+    image: autocompression:local
+    profiles: ["cli"]
+    build:
+      context: .
+    volumes:
+      - ./input:/input
+      - ./workspace:/workspace
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
-  # Development service - keeps container running for VS Code
+  # Dev container (stays alive, live-edit code via bind mounts)
   dev:
+    image: autocompression:local
+    profiles: ["dev"]
     build:
       context: .
     ports:
-      - 8000:8000
+      - "8000:8000"
     volumes:
       - ./input:/input
       - ./workspace:/workspace
       - ./code:/app/code:cached
       - ./Profiles:/app/Profiles:cached
+      - ./FastVQA-and-FasterVQA:/app/FastVQA-and-FasterVQA:cached
     deploy:
       resources:
         reservations:
@@ -44,4 +39,5 @@ services:
               capabilities: [gpu]
     stdin_open: true
     tty: true
-    entrypoint: "sh /app/code/entrypoint.sh"
+    entrypoint: ["sh", "-lc", "sleep 2147483647"]
+    command: []

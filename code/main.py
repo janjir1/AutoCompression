@@ -88,8 +88,8 @@ if __name__ == '__main__':
                         help='Path to the settings YAML.')
     parser.add_argument('--workspace',    '-w', required=True,
                         help='Base workspace directory.')
-    parser.add_argument('--tools',        '-t', required=True,
-                        help='Directory containing external tools.')
+    parser.add_argument('--tools',        '-t', required=False,
+                        help='Does nothing, now')
 
     args = parser.parse_args()
 

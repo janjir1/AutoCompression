@@ -1,5 +1,5 @@
 Black_bar_detection:
-  Enabled: true
+  Enabled: false
   frames_to_detect: 10
 
 Resolution_calculation:
@@ -15,7 +15,7 @@ Resolution_calculation:
   Threads: 3
 
 CQ_calculation:
-  Enabled: true
+  Enabled: false
   cq_values:
     - 15
     - 18
@@ -36,4 +36,4 @@ Export_output:
   Enabled: false
 
 Enable_delete:
-  Enabled: true
+  Enabled: false

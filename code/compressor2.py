@@ -235,7 +235,7 @@ def temporal_crop(VPC: VideoProcessingConfig, NoFS_offset: int = 3) -> bool:
 
     if VPC.profile["FS_enable"][1] and VPC.FS_support:
         command = [
-            os.path.join(VPC.tools_path, "ffmpeg"),
+            "ffmpeg",
             "-y",  # Overwrite output files
             "-ss", str(VPC.start),  # Start time
             "-i", VPC.source_path,  # Input file
@@ -243,7 +243,7 @@ def temporal_crop(VPC: VideoProcessingConfig, NoFS_offset: int = 3) -> bool:
         ]
     else:
         command = [
-            os.path.join(VPC.tools_path, "ffmpeg"),
+            "ffmpeg",
             "-y",  # Overwrite output files
             "-fflags", "+genpts",                              # Generate missing PTS
             "-copyts",                                         # Preserve input timestamps
@@ -368,7 +368,7 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
 
             # Try Dolby Vision first
             logger.debug("[video_ffmpeg.get_video_metadata_type] Attempting Dolby Vision metadata extraction")
-            dovi_tool_path = os.path.join(VPC.tools_path, "dovi_tool")
+            dovi_tool_path = "dovi_tool"
             dovi = [f"{dovi_tool_path}", "extract-rpu", "-i", f"{VPC.source_path}", "-o", f"{VPC.dovi_metadata_file}"]
             logger.debug(f"[video_ffmpeg.get_video_metadata_type] DoVi extraction command: {' '.join(dovi)}")
 
@@ -384,7 +384,7 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
             else:
                 # Try HDR10+ as fallback
                 logger.debug("[video_ffmpeg.get_video_metadata_type] Dolby Vision not detected, attempting HDR10+ metadata extraction")
-                HDR10plus_tool_path = os.path.join(VPC.tools_path, "hdr10plus_tool")
+                HDR10plus_tool_path = "hdr10plus_tool"
                 HDR10plus = [f"{HDR10plus_tool_path}", "extract", f"{VPC.source_path}", "-o", f"{VPC.HDR10_metadata_file}"]
                 logger.debug(f"[video_ffmpeg.get_video_metadata_type] HDR10+ extraction command: {' '.join(HDR10plus)}")
 
@@ -432,7 +432,7 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
 
         if VPC.HDR_type == "DoVi":
             logger.debug("[video_ffmpeg.video_HDR_extract] Extracting Dolby Vision RPU metadata")
-            dovi_tool_path = os.path.join(VPC.tools_path, "dovi_tool")
+            dovi_tool_path = "dovi_tool"
             dovi = [f"{dovi_tool_path}", "extract-rpu", "-i", f"{VPC.source_path}", "-o", f"{VPC.dovi_metadata_file}"]
             logger.debug(f"[video_ffmpeg.video_HDR_extract] DoVi extraction command: {' '.join(dovi)}")
 
@@ -446,7 +446,7 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
         
         elif VPC.HDR_type == "HDR10":
             logger.debug("[video_ffmpeg.video_HDR_extract] Extracting HDR10+ dynamic metadata")
-            HDR10plus_tool_path = os.path.join(VPC.tools_path, "hdr10plus_tool")
+            HDR10plus_tool_path = "hdr10plus_tool"
             HDR10plus = [f"{HDR10plus_tool_path}", "extract", f"{VPC.source_path}", "-o", f"{VPC.HDR10_metadata_file}"]
             logger.debug(f"[video_ffmpeg.video_HDR_extract] HDR10+ extraction command: {' '.join(HDR10plus)}")
 
@@ -492,13 +492,13 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
         
         if VPC.HDR_type == "HDR10":
             logger.debug("[video_ffmpeg.video_HDR_inject] Injecting HDR10+ dynamic metadata")
-            HDR10plus_tool_path = os.path.join(VPC.tools_path, "hdr10plus_tool")
+            HDR10plus_tool_path = "hdr10plus_tool"
             command = [HDR10plus_tool_path, "inject", "-i", VPC.source_path, "-j", VPC.HDR10_metadata_file, "-o", VPC.target_path]
             logger.debug(f"[video_ffmpeg.video_HDR_inject] HDR10+ injection command: {' '.join(command)}")
 
         elif VPC.HDR_type == "DoVi":
             logger.debug("[video_ffmpeg.video_HDR_inject] Injecting Dolby Vision RPU metadata")
-            dovi_tool_path = os.path.join(VPC.tools_path, "dovi_tool")
+            dovi_tool_path = "dovi_tool"
             command = [dovi_tool_path, "inject-rpu", "-i", VPC.source_path, "--rpu-in", VPC.dovi_metadata_file, "-o", VPC.target_path]
             logger.debug(f"[video_ffmpeg.video_HDR_inject] DoVi injection command: {' '.join(command)}")
 
@@ -555,7 +555,7 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
             return command
 
         command = [
-            os.path.join(VPC.tools_path, "ffmpeg"),  # Command to run FFmpeg
+            "ffmpeg",  # Command to run FFmpeg
             "-i", VPC.source_path,  # Input file
             "-an",  # No audio
             "-sn",  # No subtitles

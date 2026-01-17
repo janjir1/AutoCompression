@@ -202,7 +202,7 @@ def _run_VQA_process(video_path: str, shared_dict: dict, lock) -> int:
     name = os.path.basename(video_path)[:-4]
 
     # Construct the command for VQA execution
-    command = [sys.executable, "./FastVQA-and-FasterVQA/vqa.py", "-v", video_path]
+    command = [sys.executable, "/app/FastVQA-and-FasterVQA/vqa.py", "-v", video_path]
     logger.debug(f"Starting VQA calculation on file {name} (Video ID: {video_id}) with PID {os.getpid()}")
 
     try:
@@ -707,7 +707,7 @@ def exportFrame(VPC: VideoProcessingConfig, target_name_path: str, time: int, pn
     # -update 1 overwrites the file if it exists,
     # -y forces overwriting without prompting.
     command = [
-        os.path.join(VPC.tools_path, "ffmpeg"),
+        "ffmpeg",
         "-ss", str(time),
         "-i", VPC.orig_file_path,
         "-frames:v", "1",
