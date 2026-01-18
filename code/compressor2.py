@@ -717,6 +717,12 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
     logger.debug("[video_ffmpeg] FFmpeg encoding workflow completed successfully")
     return True
 
+#TODO
+#new ffmpeg + svt-av1-hdr function here
+#basic commands:
+#ffmpeg -i /input/DoVi.mkv -pix_fmt yuv420p10le -f rawvideo - | SvtAv1EncApp -i /workspace/input.yuv -w 3840 -h 2160 -b /workspace/video.ivf --dolby-vision-rpu /workspace/dovi_rpu.bin
+#ffmpeg -i video.ivf -c:v copy -an video.mkv
+
 def delete_file(VPC, file: str) -> None:
     if VPC.test_settings["Enable_delete"]["Enabled"]:
         logger.debug(f"[delete_file] Deleting: {file}")

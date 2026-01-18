@@ -8,7 +8,6 @@ ENV TZ=Europe/Prague
 RUN apt-get update && \
     apt-get install -y software-properties-common curl && \
     add-apt-repository ppa:deadsnakes/ppa && \
-    apt-get update && \
     apt-get install -y python3.12 python3.12-venv python3.12-dev && \
     update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1 && \
     update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1 && \
@@ -19,11 +18,19 @@ RUN apt-get update && \
 RUN apt-get update && \
     apt-get install -y \
         autoconf automake build-essential cmake git libtool pkg-config \
+        clang \
+        rustc cargo \
+        libssl-dev \
         libass-dev libfreetype6-dev libgnutls28-dev libmp3lame-dev \
         libopus-dev libtheora-dev libvorbis-dev libvpx-dev libx264-dev \
         libnuma-dev yasm nasm libjpeg-dev wget tar ca-certificates \
         libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 libgomp1 && \
     rm -rf /var/lib/apt/lists/*
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+RUN rustup toolchain install nightly && rustup default nightly
+RUN cargo install cargo-c --locked
 
 # 4. Download and install NVIDIA Video Codec SDK headers
 WORKDIR /tmp/nv-codec
@@ -57,6 +64,40 @@ RUN git clone --depth 1 https://bitbucket.org/multicoreware/x265_git.git && \
     make -j$(nproc) && make install && \
     ldconfig
 
+# 1) Build + install libdovi (from dovi_tool repo, dolby_vision subdir)
+WORKDIR /tmp/dovi_tool
+RUN git clone --depth 1 https://github.com/quietvoid/dovi_tool.git . && \
+    cd ./dolby_vision && \
+    cargo cinstall --release --prefix=/usr/local && \
+    ldconfig
+
+# 2) Build + install libhdr10plus-rs (from hdr10plus_tool repo, hdr10plus subdir)
+WORKDIR /tmp/hdr10plus_tool
+RUN git clone --depth 1 https://github.com/quietvoid/hdr10plus_tool.git . && \
+    cd ./hdr10plus && \
+    cargo cinstall --release --prefix=/usr/local && \
+    ldconfig
+
+# Build and install SVT-AV1-HDR (libsvtav1)
+WORKDIR /tmp/svtav1hdr
+RUN git clone --depth 1 https://github.com/juliobbv-p/svt-av1-hdr.git . && \
+    ./Build/linux/build.sh release --enable-dovi --enable-hdr10plus && \
+    install -d /usr/local/lib/pkgconfig && \
+    install -m 0644 /tmp/svtav1hdr/Build/linux/Release/SvtAv1Enc.pc /usr/local/lib/pkgconfig/ && \
+    ldconfig
+
+RUN pkg-config --modversion SvtAv1Enc
+
+# Build and install libfdk-aac
+WORKDIR /tmp/fdk-aac
+#apt-get update && apt-get install -y autoconf automake libtool pkg-config && \
+RUN     git clone --depth 1 https://github.com/mstorsjo/fdk-aac.git . && \
+    autoreconf -fiv && \
+    ./configure --prefix=/usr/local && \
+    make -j"$(nproc)" && \
+    make install && \
+    ldconfig
+
 # 7. Build FFmpeg with NVENC support
 WORKDIR /tmp/ffmpeg-build
 RUN git clone --depth 1 https://git.ffmpeg.org/ffmpeg.git ffmpeg
@@ -87,6 +128,8 @@ RUN export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH" && \
     --enable-libtheora \
     --enable-libvorbis \
     --enable-libvmaf \
+#    --enable-libsvtav1 \
+    --enable-libfdk_aac \
     --disable-debug \
     --disable-doc && \
     make -j$(nproc) && make install && ldconfig
@@ -106,6 +149,7 @@ RUN rm -rf /tmp/ffmpeg-build /tmp/x265-build /tmp/vmaf-build /tmp/nv-codec && \
 
 # 10. Set environment variable for NVIDIA runtime
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
+
 
 ARG DOVI_TOOL_VERSION=2.3.1
 RUN wget -q https://github.com/quietvoid/dovi_tool/releases/download/${DOVI_TOOL_VERSION}/dovi_tool-${DOVI_TOOL_VERSION}-x86_64-unknown-linux-musl.tar.gz && \
