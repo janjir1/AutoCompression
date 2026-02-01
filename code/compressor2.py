@@ -53,7 +53,7 @@ def compress(VPC: VideoProcessingConfig) -> bool:
     # Map compression function names to actual functions
     function_mapping = {
     "HandbrakeAV1": video_HandbrakeAV1,
-    "ffmpeg"      : video_ffmpeg
+    "ffmpeg"      : video_ffmpeg_h265
     }
 
     # Validate that the requested compression function exists
@@ -324,7 +324,7 @@ def video_HandbrakeAV1(VPC: VideoProcessingConfig) -> bool:
         logger.error(f"[video_HandbrakeAV1] HandBrake execution failed")
         return False
     
-def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
+def video_ffmpeg_h265(VPC: VideoProcessingConfig) -> bool:
     """
     Main FFmpeg-based video encoding function with HDR metadata handling.
 
@@ -716,6 +716,9 @@ def video_ffmpeg(VPC: VideoProcessingConfig) -> bool:
 
     logger.debug("[video_ffmpeg] FFmpeg encoding workflow completed successfully")
     return True
+
+def video_ffmpeg_AV1(VPC: VideoProcessingConfig) -> bool:
+    None
 
 #TODO
 #new ffmpeg + svt-av1-hdr function here
