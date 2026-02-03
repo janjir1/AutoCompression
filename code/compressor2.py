@@ -53,7 +53,8 @@ def compress(VPC: VideoProcessingConfig) -> bool:
     # Map compression function names to actual functions
     function_mapping = {
     "HandbrakeAV1": video_HandbrakeAV1,
-    "ffmpeg"      : video_ffmpeg_h265
+    "ffmpeg"      : video_ffmpeg_h265,
+    "ffmpeg_AV1"  : video_ffmpeg_AV1
     }
 
     # Validate that the requested compression function exists
@@ -323,7 +324,133 @@ def video_HandbrakeAV1(VPC: VideoProcessingConfig) -> bool:
     else:
         logger.error(f"[video_HandbrakeAV1] HandBrake execution failed")
         return False
+
+def get_video_metadata_type(VPC: VideoProcessingConfig):
+
+    """
+    Detect and cache the HDR metadata type present in a video file.
+
+    This function performs a sequential check for Dolby Vision (DoVi) and HDR10+ metadata
+    by attempting to extract metadata using specialized tools. The detected metadata type
+    is cached to avoid redundant detection operations.
+
+    Args:
+        VPC (VideoProcessingConfig): Video processing configuration
+
+    Returns:
+        bool: True if metadata type was successfully detected or already cached,
+                False if no supported HDR metadata was found\
+        
+    Note:
+        DoVi detection takes priority over HDR10+ detection.
+    """
+    if VPC.HDR_type == "uninit":
+        logger.debug(f"[video_ffmpeg.get_video_metadata_type] Starting HDR metadata type detection for: {VPC.source_path}")
+        logger.debug(f"[video_ffmpeg.get_video_metadata_type] Output paths - DoVi: {VPC.dovi_metadata_file}, HDR10+: {VPC.HDR10_metadata_file}")
+        logger.debug("[video_ffmpeg.get_video_metadata_type] Metadata type not cached, performing detection")
+
+        # Try Dolby Vision first
+        logger.debug("[video_ffmpeg.get_video_metadata_type] Attempting Dolby Vision metadata extraction")
+        dovi_tool_path = "dovi_tool"
+        dovi = [f"{dovi_tool_path}", "extract-rpu", "-i", f"{VPC.source_path}", "-o", f"{VPC.dovi_metadata_file}"]
+        logger.debug(f"[video_ffmpeg.get_video_metadata_type] DoVi extraction command: {' '.join(dovi)}")
+
+        if not execute(dovi):
+            logger.warning("[video_ffmpeg.get_video_metadata_type] DoVi tool execution failed")
+            return True
+
+        if check_output(VPC.dovi_metadata_file):
+            logger.debug("[video_ffmpeg.get_video_metadata_type] DoVi metadata file is valid")
+            VPC.HDR_type = "DoVi"
+            return True
+        
+        else:
+            # Try HDR10+ as fallback
+            logger.debug("[video_ffmpeg.get_video_metadata_type] Dolby Vision not detected, attempting HDR10+ metadata extraction")
+            HDR10plus_tool_path = "hdr10plus_tool"
+            HDR10plus = [f"{HDR10plus_tool_path}", "extract", f"{VPC.source_path}", "-o", f"{VPC.HDR10_metadata_file}"]
+            logger.debug(f"[video_ffmpeg.get_video_metadata_type] HDR10+ extraction command: {' '.join(HDR10plus)}")
+
+            if not execute(HDR10plus):
+                logger.warning("[video_ffmpeg.get_video_metadata_type] HDR10+ tool execution failed")
+
+            if check_output(VPC.HDR10_metadata_file):
+                logger.debug("HDR10+ metadata file is valid")
+                VPC.HDR_type = "HDR10"
+                return True
+            else: 
+                logger.debug("HDR10+ metadata file is not valid")
+                VPC.HDR_type = "None"
+                return True
+    else:  # Metadata type has been previously cached
+        logger.debug(f"[video_ffmpeg.get_video_metadata_type] Using cached metadata type: {VPC.HDR_type}")
+        return True
+
+def video_HDR_extract(VPC: VideoProcessingConfig):
+    """
+    Extract HDR metadata from video files based on the previously detected metadata type.
+
+    This function performs the actual extraction of HDR metadata after the type has been
+    determined by get_video_metadata_type(). It handles both Dolby Vision RPU extraction
+    and HDR10+ dynamic metadata extraction using specialized tools.
+
+    Args:
+        VPC (VideoProcessingConfig): Video processing configuration
+
+    Returns:
+        bool: True if extraction succeeded, False if extraction failed or unsupported metadata type
+
+    """
+
+    #TODO spatial crop for dovi
+
+    logger.debug(f"[video_ffmpeg.video_HDR_extract] Starting HDR metadata extraction for: {VPC.source_path}")
+    logger.debug(f"[video_ffmpeg.video_HDR_extract] Metadata type: {VPC.HDR_type}")
+    logger.debug(f"[video_ffmpeg.video_HDR_extract] Output paths - DoVi: {VPC.dovi_metadata_file}, HDR10+: {VPC.HDR10_metadata_file}")
+
+    if VPC.HDR_type == "uninit":
+        if not get_video_metadata_type(VPC):
+            logger.error("[video_ffmpeg.video_HDR_extract] Unable to get video metadata type")
+            return False
+
+    if VPC.HDR_type == "DoVi":
+        logger.debug("[video_ffmpeg.video_HDR_extract] Extracting Dolby Vision RPU metadata")
+        dovi_tool_path = "dovi_tool"
+        dovi = [f"{dovi_tool_path}", "extract-rpu", "-i", f"{VPC.source_path}", "-o", f"{VPC.dovi_metadata_file}"]
+        logger.debug(f"[video_ffmpeg.video_HDR_extract] DoVi extraction command: {' '.join(dovi)}")
+
+        if not execute(dovi):
+            logger.error("[video_ffmpeg.video_HDR_extract] DoVi extraction failed")
+            return False
+        if not check_output(VPC.dovi_metadata_file):
+            logger.error("[video_ffmpeg.video_HDR_extract] DoVi metadata file validation failed")
+            return False
+        return True
     
+    elif VPC.HDR_type == "HDR10":
+        logger.debug("[video_ffmpeg.video_HDR_extract] Extracting HDR10+ dynamic metadata")
+        HDR10plus_tool_path = "hdr10plus_tool"
+        HDR10plus = [f"{HDR10plus_tool_path}", "extract", f"{VPC.source_path}", "-o", f"{VPC.HDR10_metadata_file}"]
+        logger.debug(f"[video_ffmpeg.video_HDR_extract] HDR10+ extraction command: {' '.join(HDR10plus)}")
+
+        if not execute(HDR10plus):
+            logger.error("[video_ffmpeg.video_HDR_extract] HDR10+ extraction failed")
+            return False
+        if not check_output(VPC.HDR10_metadata_file):
+            logger.error("[video_ffmpeg.video_HDR_extract] HDR10+ metadata file validation failed")
+            return False
+
+        logger.debug("[video_ffmpeg.video_HDR_extract] HDR10+ metadata extraction completed successfully")
+        return True
+    
+    elif VPC.HDR_type == "None":
+        logger.debug("[video_ffmpeg.video_HDR_extract] File doesn't contain HDR metadata")
+        return True
+    else:
+        logger.error(f"[video_ffmpeg.video_HDR_extract] Unsupported or uninitialized metadata type: {VPC.HDR_type}")
+        logger.error("[video_ffmpeg.video_HDR_extract] Ensure get_video_metadata_type() was called successfully before extraction")
+        return False
+          
 def video_ffmpeg_h265(VPC: VideoProcessingConfig) -> bool:
     """
     Main FFmpeg-based video encoding function with HDR metadata handling.
@@ -342,131 +469,6 @@ def video_ffmpeg_h265(VPC: VideoProcessingConfig) -> bool:
     logger.debug(f"[video_ffmpeg] Starting FFmpeg encoding workflow")
     logger.debug(f"[video_ffmpeg] HDR processing enabled: {VPC.profile['HDR_enable'][1]}")
 
-    def get_video_metadata_type(VPC: VideoProcessingConfig):
-
-        """
-        Detect and cache the HDR metadata type present in a video file.
-
-        This function performs a sequential check for Dolby Vision (DoVi) and HDR10+ metadata
-        by attempting to extract metadata using specialized tools. The detected metadata type
-        is cached to avoid redundant detection operations.
-
-        Args:
-            VPC (VideoProcessingConfig): Video processing configuration
-
-        Returns:
-            bool: True if metadata type was successfully detected or already cached,
-                 False if no supported HDR metadata was found\
-            
-        Note:
-            DoVi detection takes priority over HDR10+ detection.
-        """
-        if VPC.HDR_type == "uninit":
-            logger.debug(f"[video_ffmpeg.get_video_metadata_type] Starting HDR metadata type detection for: {VPC.source_path}")
-            logger.debug(f"[video_ffmpeg.get_video_metadata_type] Output paths - DoVi: {VPC.dovi_metadata_file}, HDR10+: {VPC.HDR10_metadata_file}")
-            logger.debug("[video_ffmpeg.get_video_metadata_type] Metadata type not cached, performing detection")
-
-            # Try Dolby Vision first
-            logger.debug("[video_ffmpeg.get_video_metadata_type] Attempting Dolby Vision metadata extraction")
-            dovi_tool_path = "dovi_tool"
-            dovi = [f"{dovi_tool_path}", "extract-rpu", "-i", f"{VPC.source_path}", "-o", f"{VPC.dovi_metadata_file}"]
-            logger.debug(f"[video_ffmpeg.get_video_metadata_type] DoVi extraction command: {' '.join(dovi)}")
-
-            if not execute(dovi):
-                logger.warning("[video_ffmpeg.get_video_metadata_type] DoVi tool execution failed")
-                return True
-
-            if check_output(VPC.dovi_metadata_file):
-                logger.debug("[video_ffmpeg.get_video_metadata_type] DoVi metadata file is valid")
-                VPC.HDR_type = "DoVi"
-                return True
-            
-            else:
-                # Try HDR10+ as fallback
-                logger.debug("[video_ffmpeg.get_video_metadata_type] Dolby Vision not detected, attempting HDR10+ metadata extraction")
-                HDR10plus_tool_path = "hdr10plus_tool"
-                HDR10plus = [f"{HDR10plus_tool_path}", "extract", f"{VPC.source_path}", "-o", f"{VPC.HDR10_metadata_file}"]
-                logger.debug(f"[video_ffmpeg.get_video_metadata_type] HDR10+ extraction command: {' '.join(HDR10plus)}")
-
-                if not execute(HDR10plus):
-                    logger.warning("[video_ffmpeg.get_video_metadata_type] HDR10+ tool execution failed")
-
-                if check_output(VPC.HDR10_metadata_file):
-                    logger.debug("HDR10+ metadata file is valid")
-                    VPC.HDR_type = "HDR10"
-                    return True
-                else: 
-                    logger.debug("HDR10+ metadata file is not valid")
-                    VPC.HDR_type = "None"
-                    return True
-        else:  # Metadata type has been previously cached
-            logger.debug(f"[video_ffmpeg.get_video_metadata_type] Using cached metadata type: {VPC.HDR_type}")
-            return True
-
-    def video_HDR_extract(VPC: VideoProcessingConfig):
-        """
-        Extract HDR metadata from video files based on the previously detected metadata type.
-
-        This function performs the actual extraction of HDR metadata after the type has been
-        determined by get_video_metadata_type(). It handles both Dolby Vision RPU extraction
-        and HDR10+ dynamic metadata extraction using specialized tools.
-
-        Args:
-            VPC (VideoProcessingConfig): Video processing configuration
-
-        Returns:
-            bool: True if extraction succeeded, False if extraction failed or unsupported metadata type
-
-        """
-
-        #TODO spatial crop for dovi
-
-        logger.debug(f"[video_ffmpeg.video_HDR_extract] Starting HDR metadata extraction for: {VPC.source_path}")
-        logger.debug(f"[video_ffmpeg.video_HDR_extract] Metadata type: {VPC.HDR_type}")
-        logger.debug(f"[video_ffmpeg.video_HDR_extract] Output paths - DoVi: {VPC.dovi_metadata_file}, HDR10+: {VPC.HDR10_metadata_file}")
-
-        if VPC.HDR_type == "uninit":
-            if not get_video_metadata_type(VPC):
-                logger.error("[video_ffmpeg.video_HDR_extract] Unable to get video metadata type")
-                return False
-
-        if VPC.HDR_type == "DoVi":
-            logger.debug("[video_ffmpeg.video_HDR_extract] Extracting Dolby Vision RPU metadata")
-            dovi_tool_path = "dovi_tool"
-            dovi = [f"{dovi_tool_path}", "extract-rpu", "-i", f"{VPC.source_path}", "-o", f"{VPC.dovi_metadata_file}"]
-            logger.debug(f"[video_ffmpeg.video_HDR_extract] DoVi extraction command: {' '.join(dovi)}")
-
-            if not execute(dovi):
-                logger.error("[video_ffmpeg.video_HDR_extract] DoVi extraction failed")
-                return False
-            if not check_output(VPC.dovi_metadata_file):
-                logger.error("[video_ffmpeg.video_HDR_extract] DoVi metadata file validation failed")
-                return False
-            return True
-        
-        elif VPC.HDR_type == "HDR10":
-            logger.debug("[video_ffmpeg.video_HDR_extract] Extracting HDR10+ dynamic metadata")
-            HDR10plus_tool_path = "hdr10plus_tool"
-            HDR10plus = [f"{HDR10plus_tool_path}", "extract", f"{VPC.source_path}", "-o", f"{VPC.HDR10_metadata_file}"]
-            logger.debug(f"[video_ffmpeg.video_HDR_extract] HDR10+ extraction command: {' '.join(HDR10plus)}")
-
-            if not execute(HDR10plus):
-                logger.error("[video_ffmpeg.video_HDR_extract] HDR10+ extraction failed")
-                return False
-            if not check_output(VPC.HDR10_metadata_file):
-                logger.error("[video_ffmpeg.video_HDR_extract] HDR10+ metadata file validation failed")
-                return False
-
-            logger.debug("[video_ffmpeg.video_HDR_extract] HDR10+ metadata extraction completed successfully")
-            return True
-        
-        elif VPC.HDR_type == "None":
-            logger.debug("[video_ffmpeg.video_HDR_extract] File doesn't contain HDR metadata")
-            return True
-        else:
-            logger.error(f"[video_ffmpeg.video_HDR_extract] Unsupported or uninitialized metadata type: {VPC.HDR_type}")
-            logger.error("[video_ffmpeg.video_HDR_extract] Ensure get_video_metadata_type() was called successfully before extraction")
-            return False
         
     def video_HDR_inject(VPC: VideoProcessingConfig):
         """
@@ -718,7 +720,114 @@ def video_ffmpeg_h265(VPC: VideoProcessingConfig) -> bool:
     return True
 
 def video_ffmpeg_AV1(VPC: VideoProcessingConfig) -> bool:
-    None
+
+    def SvtAv1EncApp_encode(VPC: VideoProcessingConfig) -> bool:
+        """
+        Encode video files using SVT-AV1 encoder with cropping, scaling, and quality control.
+
+        This function performs video encoding using SVT-AV1 with support for cropping,
+        resolution scaling, and constant quality encoding. It handles video filter
+        chain construction and integrates with profile-based encoding settings.
+
+        Args:
+            VPC (VideoProcessingConfig): Video processing configuration
+
+        Returns:
+            bool: True if encoding succeeded and output is valid, False otherwise
+            
+        Note:
+            The function strips audio (-an) and subtitle (-sn) streams, focusing on
+            video-only encoding for HDR workflows.
+            
+        Raises:
+            ValueError: If crop parameters result in invalid dimensions
+            FileNotFoundError: If SVT-AV1 executable is not found
+        """
+        logger.debug(f"[video_ffmpeg_AV1.SvtAv1EncApp_encode] Starting SVT-AV1 video encoding")
+        logger.debug(f"[video_ffmpeg_AV1.SvtAv1EncApp_encode] Source: {VPC.source_path} -> Target: {VPC.target_path}")
+        logger.debug(f"[video_ffmpeg_AV1.SvtAv1EncApp_encode] Encoding parameters - Target resolution: {VPC.output_res}, CQ: {VPC.output_cq}, Crop: {VPC.crop}")
+
+        ffmpeg_part = (
+            f"ffmpeg -i '{VPC.source_path}' "
+            "-pix_fmt yuv420p10le "       # 10-bit pixel format
+            "-f yuv4mpegpipe -strict -1 " # Y4M pipe (carries metadata)
+            "-an -sn "                    # No audio/subs
+            "-"                           # Output to stdout
+        )
+
+        svt_part = (
+            "SvtAv1EncApp -i stdin "      # Read from pipe
+            "--input-depth 10 "           # Explicit 10-bit depth
+            "-b /workspace/video.ivf "    # Output IVF file
+            "--dolby-vision-rpu /workspace/dovi_rpu.bin"
+        )
+
+        # The final list calls /bin/sh to execute the pipe
+        command = [
+            "/bin/sh",
+            "-c",
+            f"{ffmpeg_part} | {svt_part}"
+        ]
+
+        logger.debug(f"[video_ffmpeg_AV1.SvtAv1EncApp_encode] Complete FFmpeg command: {' '.join(command)}")
+        logger.debug("[video_ffmpeg_AV1.SvtAv1EncApp_encode] Starting FFmpeg encoding process")
+
+        if execute(command):
+            if check_output(VPC.target_path):
+                logger.debug("[video_ffmpeg_AV1.SvtAv1EncApp_encode] FFmpeg encoding completed successfully")
+                return True
+            else:
+                logger.error("[video_ffmpeg_AV1.SvtAv1EncApp_encode] Output file validation failed")
+                return False
+        else:
+            return False
+
+
+    if VPC.profile["HDR_enable"][1]:
+        logger.debug("[video_ffmpeg_AV1] HDR processing enabled - starting metadata workflow")
+
+        out = video_HDR_extract(VPC)
+        # Extract HDR metadata from source file
+        if out and (VPC.HDR_type != "None"):
+            
+            # Encode video to HEVC format
+            VPC.setTargetPath(os.path.join(VPC.workspace, VPC.output_file_name + "_reencode.ivf"))
+            if not SvtAv1EncApp_encode(VPC):
+                logger.error("[video_ffmpeg_AV1] FFmpeg encoding failed")
+                return False
+            delete_file(VPC, VPC.source_path)
+
+            VPC.setSourcePath(VPC.target_path)
+
+            # Convert final HEVC to MKV container
+            VPC.setTargetPath(VPC.output_file_path)
+            if not hevc_to_mkv(VPC):
+                logger.error("[video_ffmpeg] HEVC to MKV conversion failed")
+                return False
+            delete_file(VPC, VPC.source_path)
+            
+        else: 
+            logger.error("[video_ffmpeg] HDR metadata extraction failed")
+            VPC.DisableParentHDR()
+            logger.debug("[video_ffmpeg] Standard encoding mode (no HDR processing)")
+            VPC.setTargetPath(VPC.output_file_path)
+            if not video_encode_ffmpeg(VPC):
+                logger.error("[video_ffmpeg] Standard FFmpeg encoding failed")
+                return False
+            delete_file(VPC, VPC.source_path)
+
+    else:
+
+        # Standard encoding without HDR processing
+        logger.debug("[video_ffmpeg] Standard encoding mode (no HDR processing)")
+        VPC.setTargetPath(VPC.output_file_path)
+        if not video_encode_ffmpeg(VPC):
+            logger.error("[video_ffmpeg] Standard FFmpeg encoding failed")
+            return False
+        delete_file(VPC, VPC.source_path)
+
+    logger.debug("[video_ffmpeg] FFmpeg encoding workflow completed successfully")
+    return True
 
 #TODO
 #new ffmpeg + svt-av1-hdr function here
