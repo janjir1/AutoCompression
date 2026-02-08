@@ -450,6 +450,50 @@ def video_HDR_extract(VPC: VideoProcessingConfig):
         logger.error("[video_ffmpeg.video_HDR_extract] Ensure get_video_metadata_type() was called successfully before extraction")
         return False
     
+def elementary_to_mkv(VPC: VideoProcessingConfig):
+    """
+    Convert IVF elementary stream to MKV container format.
+
+    This function performs a two-step conversion process to properly containerize
+    HEVC streams with correct timestamps and formatting.
+
+    Args:
+        VPC (VideoProcessingConfig): Video processing configuration
+
+    Returns:
+        bool: True if conversion succeeded, False otherwise
+    """
+
+    logger.debug(f"[compressor.elementary_to_mkv] Converting to .mkv")
+    logger.debug(f"[compressor.elementary_to_mkv] Source: {VPC.source_path} -> Target: {VPC.target_path}")
+
+    command = [
+        'mkvmerge',
+        '-o', VPC.target_path, 
+        '--default-duration', f'0:{VPC.orig_framerate}fps',
+        '--fix-bitstream-timing-information', '0', 
+        '--cues', '0:iframes',
+        '--clusters-in-meta-seek',
+        VPC.source_path         
+    ]
+    
+    logger.debug(f"[compressor.elementary_to_mkv] FFmpeg command: {' '.join(command)}")
+
+    if not execute(command):
+        logger.error("[compressor.elementary_to_mkv] IVF to MKV failed")
+        return False
+    if not check_output(VPC.target_path):
+        logger.error("[compressor.elementary_to_mkv] Conversion output validation failed")
+        return False
+    
+    logger.debug("[compressor.elementary_to_mkv] IVF to MKV conversion completed successfully")
+    return True
+
+def vfCropComandGenerator(VPC: VideoProcessingConfig) -> str:
+    target_v_res = VPC.orig_v_res - VPC.crop[0] - VPC.crop[1]
+    command = f"crop={VPC.orig_h_res}:{target_v_res}:0:{VPC.crop[0]},scale={VPC.output_res}:-2"
+    logger.debug(f"[video_ffmpeg.video_encode_ffmpeg.vfCropComandGenerator] Generated filter: {command}")
+    return command
 
 def video_ffmpeg_h265(VPC: VideoProcessingConfig) -> bool:
     """
@@ -550,12 +594,6 @@ def video_ffmpeg_h265(VPC: VideoProcessingConfig) -> bool:
         logger.debug(f"[video_ffmpeg.video_encode_ffmpeg] Source: {VPC.source_path} -> Target: {VPC.target_path}")
         logger.debug(f"[video_ffmpeg.video_encode_ffmpeg] Encoding parameters - Target resolution: {VPC.output_res}, CQ: {VPC.output_cq}, Crop: {VPC.crop}")
 
-        def vfCropComandGenerator(VPC: VideoProcessingConfig) -> str:
-            target_v_res = VPC.orig_v_res - VPC.crop[0] - VPC.crop[1]
-            command = f"crop={VPC.orig_h_res}:{target_v_res}:0:{VPC.crop[0]},scale={VPC.output_res}:-2:sws_flags=neighbor"
-            logger.debug(f"[video_ffmpeg.video_encode_ffmpeg.vfCropComandGenerator] Generated filter: {command}")
-            return command
-
         command = [
             "ffmpeg",  # Command to run FFmpeg
             "-i", VPC.source_path,  # Input file
@@ -598,72 +636,6 @@ def video_ffmpeg_h265(VPC: VideoProcessingConfig) -> bool:
                 return False
         else:
             return False
-        
-        #Enable HDR only for h265
-             
-    def hevc_to_mkv(VPC: VideoProcessingConfig):
-        """
-        Convert HEVC elementary stream to MKV container format.
-
-        This function performs a two-step conversion process to properly containerize
-        HEVC streams with correct timestamps and formatting.
-
-        Args:
-            VPC (VideoProcessingConfig): Video processing configuration
-
-        Returns:
-            bool: True if conversion succeeded, False otherwise
-        """
-        logger.debug(f"[video_ffmpeg.hevc_to_mkv] Converting .hevc to .mkv")
-        logger.debug(f"[video_ffmpeg.hevc_to_mkv] Source: {VPC.source_path} -> Target: {VPC.target_path}")
-        
-        mp4_name = VPC.target_path[:-4] + ".mp4"
-        logger.debug(f"[video_ffmpeg.hevc_to_mkv] Intermediate MP4 file: {mp4_name}")
-
-        # Step 1: Convert HEVC to MP4 with proper timestamps
-        command = [
-            'ffmpeg', '-y',  # Overwrite output file
-            '-fflags', '+genpts',  # Generate presentation timestamps
-            '-r', str(VPC.orig_framerate),  # Set framerate
-            '-i', VPC.source_path,  # Input HEVC file
-            '-c:v', 'copy',  # Copy video stream
-            '-movflags', 'frag_keyframe+empty_moov',  # MP4 optimization flags
-            mp4_name
-        ]
-
-        logger.debug(f"[video_ffmpeg.hevc_to_mkv] Step 1 FFmpeg command: {' '.join(command)}")
-
-        if not execute(command):
-            logger.error("[video_ffmpeg.hevc_to_mkv] Step 1 (HEVC to MP4) failed")
-            return False
-        if not check_output(mp4_name):
-            logger.error("[video_ffmpeg.hevc_to_mkv] Step 1 output validation failed")
-            return False
-
-        logger.debug("[video_ffmpeg.hevc_to_mkv] Step 1 (HEVC to MP4) completed successfully")
-        
-
-        # Step 2: Convert MP4 to MKV
-        command = [
-            'ffmpeg', '-y',  # Overwrite output file
-            '-i', mp4_name,  # Input MP4 file
-            '-c:v', 'copy',  # Copy video stream
-            VPC.target_path  # Output MKV file
-        ]
-
-        logger.debug(f"[video_ffmpeg.hevc_to_mkv] Step 2 FFmpeg command: {' '.join(command)}")
-
-        if not execute(command):
-            logger.error("[video_ffmpeg.hevc_to_mkv] Step 2 (MP4 to MKV) failed")
-            return False
-        if not check_output(VPC.target_path):
-            logger.error("[video_ffmpeg.hevc_to_mkv] Step 2 output validation failed")
-            return False
-
-        logger.debug("[video_ffmpeg.hevc_to_mkv] Step 2 (MP4 to MKV) completed successfully")
-        logger.debug("[video_ffmpeg.hevc_to_mkv] HEVC to MKV conversion completed successfully")
-        delete_file(VPC, mp4_name)
-        return True
                 
     if VPC.profile["HDR_enable"][1]:
         logger.debug("[video_ffmpeg] HDR processing enabled - starting metadata workflow")
@@ -691,7 +663,7 @@ def video_ffmpeg_h265(VPC: VideoProcessingConfig) -> bool:
 
             # Convert final HEVC to MKV container
             VPC.setTargetPath(VPC.output_file_path)
-            if not hevc_to_mkv(VPC):
+            if not elementary_to_mkv(VPC):
                 logger.error("[video_ffmpeg] HEVC to MKV conversion failed")
                 return False
             delete_file(VPC, VPC.source_path)
@@ -913,12 +885,15 @@ def video_ffmpeg_AV1(VPC: VideoProcessingConfig) -> bool:
 
         elif VPC.HDR_type == "DoVi":
             VPC.dovi_metadata_file
+
+        resolution_filter = vfCropComandGenerator(VPC)
         
         ffmpeg_part = (
             f"ffmpeg -i {VPC.source_path} "
             "-pix_fmt yuv420p10le "       # 10-bit pixel format
             "-f yuv4mpegpipe -strict -1 " # Y4M pipe (carries metadata)
             "-an -sn "                    # No audio/subs
+            f"-vf {resolution_filter} "
             "-"                           # Output to stdout
         )
 
@@ -981,55 +956,6 @@ def video_ffmpeg_AV1(VPC: VideoProcessingConfig) -> bool:
         else:
             return False
 
-    def ivf_to_mkv(VPC: VideoProcessingConfig):
-        """
-        Convert IVF elementary stream to MKV container format.
-
-        This function performs a two-step conversion process to properly containerize
-        HEVC streams with correct timestamps and formatting.
-
-        Args:
-            VPC (VideoProcessingConfig): Video processing configuration
-
-        Returns:
-            bool: True if conversion succeeded, False otherwise
-        """
-
-        logger.debug(f"[video_ffmpeg_AV1.ivf_to_mkv] Converting .ivf to .mkv")
-        logger.debug(f"[video_ffmpeg_AV1.ivf_to_mkv] Source: {VPC.source_path} -> Target: {VPC.target_path}")
-
-        command = [
-            'mkvmerge',
-            '-o', VPC.target_path, 
-            '--default-duration', f'0:{VPC.orig_framerate}fps',
-            VPC.source_path         
-        ]
-
-        """
-        command = [
-            'ffmpeg', '-y',
-            '-fflags', '+genpts',
-            '-i', VPC.source_path,
-            '-c:v', 'copy',
-            '-an',
-            '-avoid_negative_ts', 'make_zero', 
-            '-bsf:v', 'av1_metadata=td=0', 
-            VPC.target_path
-        ]
-        """
-        
-        logger.debug(f"[video_ffmpeg_AV1.ivf_to_mkv] FFmpeg command: {' '.join(command)}")
-
-        if not execute(command):
-            logger.error("[video_ffmpeg_AV1.ivf_to_mkv] IVF to MKV failed")
-            return False
-        if not check_output(VPC.target_path):
-            logger.error("[video_ffmpeg_AV1.ivf_to_mkv] Conversion output validation failed")
-            return False
-        
-        logger.debug("[video_ffmpeg_AV1.ivf_to_mkv] IVF to MKV conversion completed successfully")
-        return True
-
     if VPC.profile["HDR_enable"][1]:
         logger.debug("[video_ffmpeg_AV1] HDR processing enabled - starting metadata workflow")
 
@@ -1048,7 +974,7 @@ def video_ffmpeg_AV1(VPC: VideoProcessingConfig) -> bool:
 
         # Convert final HEVC to MKV container
         VPC.setTargetPath(VPC.output_file_path)
-        if not ivf_to_mkv(VPC):
+        if not elementary_to_mkv(VPC):
             logger.error("[video_ffmpeg] IVF to MKV conversion failed")
             return False
         delete_file(VPC, VPC.source_path)

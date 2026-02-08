@@ -289,7 +289,7 @@ def _prepareRes_test(VPC: VideoProcessingConfig)-> tuple:
 #endregion
 
 # region Basic Tests  
-def getVMAF(reference_file: str, distorted_file: str, threads: int = 8) -> Union[float, None]:
+def getVMAF(reference_file: str, distorted_file: str, VPC, threads: int = 8) -> Union[float, None]:
     """
     Computes VMAF (Video Multi-Method Assessment Fusion) score between a reference video
     and a distorted video using FFmpeg.
@@ -305,14 +305,23 @@ def getVMAF(reference_file: str, distorted_file: str, threads: int = 8) -> Union
 
      # Define the ffmpeg command to compute VMAF with multithreading
     output_file = r"VMAFlog.json"
+    if "AV1" in VPC.profile["function"][1].upper():
+        command = [
+            'ffmpeg',
+            '-hwaccel', 'none', '-c:v',  'libdav1d', '-i', reference_file,        # Input reference file
+            '-hwaccel', 'none', '-c:v',  'libdav1d', '-i', distorted_file,        # Input distorted file
+            '-lavfi', f'libvmaf=n_threads={threads}:log_path={output_file}',  # VMAF with multithreading and log output
+            '-f', 'null', '-'            # No output file, just compute VMAF
+        ]
 
-    command = [
-        'ffmpeg',
-        '-hwaccel', 'none', '-c:v',  'libdav1d', '-i', reference_file,        # Input reference file
-        '-hwaccel', 'none', '-c:v',  'libdav1d', '-i', distorted_file,        # Input distorted file
-        '-lavfi', f'libvmaf=n_threads={threads}:log_path={output_file}',  # VMAF with multithreading and log output
-        '-f', 'null', '-'            # No output file, just compute VMAF
-    ]
+    else:
+        command = [
+            'ffmpeg',
+            '-i', reference_file,        # Input reference file
+            '-i', distorted_file,        # Input distorted file
+            '-lavfi', f'libvmaf=n_threads={threads}:log_path={output_file}',  # VMAF with multithreading and log output
+            '-f', 'null', '-'            # No output file, just compute VMAF
+        ]
 
     logger.debug(f"ffmpeg vmaf command: {command}")
 
@@ -495,7 +504,7 @@ def _createAndTestVMAF(VPC: VideoProcessingConfig, reference_video: Union[str, N
 
     passed = compressor2.compress(VPC)
     if reference_video is not None:
-        VMAF_value = getVMAF(reference_video, VPC.output_file_path, VPC.test_settings["CQ_calculation"]["threads"])
+        VMAF_value = getVMAF(reference_video, VPC.output_file_path, VPC, VPC.test_settings["CQ_calculation"]["threads"])
         logger.debug(f"VMAF Score: {VMAF_value}")
         return VMAF_value, passed
     else:

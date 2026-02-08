@@ -103,8 +103,6 @@ if __name__ == '__main__':
     print(passed)
 
     """TODO:
-        Copy all metadata even static HDR10 - h265
-        Migrate .hevc to .mkv to mkvmerge
 
         audio
         subtitles
