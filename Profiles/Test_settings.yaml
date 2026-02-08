@@ -17,13 +17,13 @@ Resolution_calculation:
 CQ_calculation:
   Enabled: false
   cq_values:
-    - 15
-    - 18
-    - 27
-    - 36
+    - 20 #15
+    - 30 #18
+    - 40 #27
+    - 50 #36
   number_of_scenes: 1 #3
   cq_reference: 1
-  scene_length: 50
+  scene_length: 2 #50
   keep_best_scenes: 0.6
   threads: 6
   

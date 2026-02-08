@@ -63,6 +63,18 @@ RUN git clone --depth 1 https://bitbucket.org/multicoreware/x265_git.git && \
           ../../source && \
     make -j$(nproc) && make install && \
     ldconfig
+    
+# 6. Build libdav1d from source
+WORKDIR /tmp/dav1d-build
+RUN git clone --depth 1 https://code.videolan.org/videolan/dav1d.git && \
+    cd dav1d && \
+    rm -rf .git && \
+    meson setup build \
+      --buildtype=release \
+      --prefix=/usr/local && \
+    ninja -C build -j"$(nproc)" && \
+    ninja -C build install && \
+    ldconfig
 
 # 1) Build + install libdovi (from dovi_tool repo, dolby_vision subdir)
 WORKDIR /tmp/dovi_tool
@@ -87,6 +99,10 @@ RUN git clone --depth 1 https://github.com/juliobbv-p/svt-av1-hdr.git . && \
     ldconfig
 
 RUN pkg-config --modversion SvtAv1Enc
+
+RUN install -d /usr/local/bin && \
+    install -m 0755 /tmp/svtav1hdr/Bin/Release/SvtAv1EncApp /usr/local/bin/ && \
+    ldconfig
 
 # Build and install libfdk-aac
 WORKDIR /tmp/fdk-aac
@@ -128,6 +144,7 @@ RUN export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH" && \
     --enable-libtheora \
     --enable-libvorbis \
     --enable-libvmaf \
+    --enable-libdav1d \
 #    --enable-libsvtav1 \
     --enable-libfdk_aac \
     --disable-debug \
@@ -165,6 +182,12 @@ RUN wget -q https://github.com/quietvoid/hdr10plus_tool/releases/download/${HDR1
     mv hdr10plus_tool /usr/local/bin/ && \
     rm hdr10plus_tool-${HDR10PLUS_TOOL_VERSION}-x86_64-unknown-linux-musl.tar.gz && \
     chmod +x /usr/local/bin/hdr10plus_tool
+
+# Download and install mkvmerge
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        mkvtoolnix && \
+    rm -rf /var/lib/apt/lists/*
 
 # 11. Application setup
 WORKDIR /app

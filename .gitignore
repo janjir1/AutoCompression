@@ -47,7 +47,9 @@ VMAFlog.json
 
 #My
 Archive/
-FastVQA-and-FasterVQA/
+FastVQA-and-FasterVQA/**
+!/FastVQA-and-FasterVQA/
+!/FastVQA-and-FasterVQA/vqa.py
 *.log
 workspace/
 tools/

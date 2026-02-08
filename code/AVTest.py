@@ -308,8 +308,8 @@ def getVMAF(reference_file: str, distorted_file: str, threads: int = 8) -> Union
 
     command = [
         'ffmpeg',
-        '-i', reference_file,        # Input reference file
-        '-i', distorted_file,        # Input distorted file
+        '-hwaccel', 'none', '-c:v',  'libdav1d', '-i', reference_file,        # Input reference file
+        '-hwaccel', 'none', '-c:v',  'libdav1d', '-i', distorted_file,        # Input distorted file
         '-lavfi', f'libvmaf=n_threads={threads}:log_path={output_file}',  # VMAF with multithreading and log output
         '-f', 'null', '-'            # No output file, just compute VMAF
     ]

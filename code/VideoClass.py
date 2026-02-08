@@ -95,6 +95,9 @@ class VideoProcessingConfig:
         self.target_res = self.orig_h_res
         self.output_res = self.orig_h_res
 
+        self.VUI, self.SideDTA = get_static_metadata(self.orig_file_path)
+
+
     def create_copy(self):
         """Create a deepcopy that remembers its parent."""
         new_copy = copy.deepcopy(self)
@@ -515,3 +518,89 @@ def is_h265(file_path: str, ffprobe_path: str = "ffprobe") -> bool:
 
     codec = streams[0].get("codec_name", "").lower()
     return codec == "hevc"
+    
+def get_static_metadata(input_file: str) -> dict:
+    """
+    Extract static metadata from a video file using FFprobe.
+
+    Args:
+        video_path: Path to the input video file.
+        tools_path: Path to external tools directory (not used in this function).
+    """
+    def parse_val(val):
+        if isinstance(val, str) and '/' in val:
+            n, d = map(int, val.split('/'))
+            return n / d
+        return float(val)
+
+    cmd = [
+        "ffprobe", 
+        "-v", "quiet", 
+        "-select_streams", "v:0", 
+        "-show_streams", 
+        "-print_format", "json", 
+        input_file
+    ]
+
+    try:
+        # 1. Run command and capture output (stdout)
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        
+        # 2. Parse the JSON string from stdout directly
+        data = json.loads(result.stdout)
+
+        VUI = dict()
+        VUI["color_primaries"] = "unknown"
+        VUI["color_space"] = "unknown"
+        VUI["color_transfer"] = "unknown"
+        VUI["chroma_location"] = "unknown"
+        SideDTA = dict()
+        SideDTA["Cll_exists"] = False
+        SideDTA["Mastering_display_exists"] = False
+        
+        # 3. extract the first stream (since we used v:0)
+        if "streams" in data and len(data["streams"]) > 0:
+    
+            json_data = data["streams"][0]
+            VUI["color_primaries"] = json_data.get("color_primaries", "unknown")
+            VUI["color_space"] = json_data.get("color_space", "unknown")
+            VUI["color_transfer"] = json_data.get("color_transfer", "unknown")
+            VUI["chroma_location"] = json_data.get("chroma_location", "unknown")
+
+            side_data_list = json_data.get("side_data_list", [])
+
+            for side_data in side_data_list:
+                if 'Content light level metadata' in side_data.values():
+                    SideDTA["max_content"] = side_data["max_content"]
+                    SideDTA["max_average"] = side_data["max_average"]
+                    SideDTA["Cll_exists"] = True
+
+                if 'Mastering display metadata' in side_data.values():
+                    SideDTA["red_x"] = parse_val(side_data["red_x"])
+                    SideDTA["red_y"] = parse_val(side_data["red_y"])
+                    SideDTA["green_x"] = parse_val(side_data["green_x"])
+                    SideDTA["green_y"] = parse_val(side_data["green_y"])
+                    SideDTA["blue_x"] = parse_val(side_data["blue_x"])
+                    SideDTA["blue_y"] = parse_val(side_data["blue_y"])
+                    SideDTA["white_point_x"] = parse_val(side_data["white_point_x"])
+                    SideDTA["white_point_y"] = parse_val(side_data["white_point_y"])
+                    SideDTA["min_luminance"] = parse_val(side_data["min_luminance"])
+                    SideDTA["max_luminance"] = parse_val(side_data["max_luminance"])
+                    SideDTA["Mastering_display_exists"] = True
+                    
+            return VUI, SideDTA
+        else:
+            print("No video stream found.")
+            return None
+
+    except subprocess.CalledProcessError as e:
+        print(f"FFprobe execution failed: {e}")
+        return None
+    except json.JSONDecodeError:
+        print("Failed to decode JSON from FFprobe output.")
+        return None
+
+# --- Usage ---
+if __name__ == '__main__':
+
+    None

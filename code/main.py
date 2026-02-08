@@ -68,6 +68,10 @@ def init(file, file_name, profile_path, settings_path, workspaces, tools_path) -
     VPC.readProfiles(profile_path, settings_path, tools_path)
     VPC.analyzeOriginal()
 
+    VPC.setSourcePath(VPC.orig_file_path)
+
+    compressor2.get_video_metadata_type(VPC)
+
     return VPC, logger, stream_logger
 
      
@@ -99,12 +103,15 @@ if __name__ == '__main__':
     print(passed)
 
     """TODO:
-        Copy all metadata even static HDR10
-        
+        Copy all metadata even static HDR10 - h265
+        Migrate .hevc to .mkv to mkvmerge
+
         audio
         subtitles
+
         Edit log messages
         Logger doesnt work in multithreading
+        
         Include metadata for windows (length, resolution)
         delete VMAFlog.json after execution of vmaf
         fix output size calculation/comparison mesage

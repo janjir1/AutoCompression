@@ -10,7 +10,10 @@ FS_enable:
 
 # Video settings
 video:
- --preset: fast            # Encoding preset: slow for better quality #slow
+  --preset: 3
+  --crf: 34
+  --enable-variance-boost: 1
+  --variance-boost-strength: 4 # Level 2: Moderate protection of complex textures
 
 
 test_settings:
@@ -20,5 +23,5 @@ test_settings:
   1280: !!float -1e-04
   1920: !!float -6.9e-05
   3840: !!float -3e-05
- defalut_cq: 26
+ defalut_cq: 34
  

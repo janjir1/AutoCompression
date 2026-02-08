@@ -10,7 +10,10 @@ FS_enable:
 
 # Video settings
 video:
- --preset: fast            # Encoding preset: slow for better quality #slow
+  --preset: 3
+  --crf: 34
+  --film-grain: 25 # Heavy synthetic grain (for 16mm/35mm scans)
+  --film-grain-denoise: 1 # ON: Aggressively blur input to save bits, then add fake grain
 
 
 test_settings:
@@ -20,5 +23,5 @@ test_settings:
   1280: !!float -1e-04
   1920: !!float -6.9e-05
   3840: !!float -3e-05
- defalut_cq: 26
+ defalut_cq: 34
  

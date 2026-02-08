@@ -357,7 +357,6 @@ def get_video_metadata_type(VPC: VideoProcessingConfig):
 
         if not execute(dovi):
             logger.warning("[video_ffmpeg.get_video_metadata_type] DoVi tool execution failed")
-            return True
 
         if check_output(VPC.dovi_metadata_file):
             logger.debug("[video_ffmpeg.get_video_metadata_type] DoVi metadata file is valid")
@@ -450,7 +449,8 @@ def video_HDR_extract(VPC: VideoProcessingConfig):
         logger.error(f"[video_ffmpeg.video_HDR_extract] Unsupported or uninitialized metadata type: {VPC.HDR_type}")
         logger.error("[video_ffmpeg.video_HDR_extract] Ensure get_video_metadata_type() was called successfully before extraction")
         return False
-          
+    
+
 def video_ffmpeg_h265(VPC: VideoProcessingConfig) -> bool:
     """
     Main FFmpeg-based video encoding function with HDR metadata handling.
@@ -743,12 +743,179 @@ def video_ffmpeg_AV1(VPC: VideoProcessingConfig) -> bool:
             ValueError: If crop parameters result in invalid dimensions
             FileNotFoundError: If SVT-AV1 executable is not found
         """
+
+        def primaries_name_to_num(name: str) -> int:
+            """
+            ffprobe stream.color_primaries -> SVT-AV1 --color-primaries number
+            """
+            if name is None:
+                return 2  # unspecified/default
+
+            n = name.strip().lower()
+
+            mapping = {
+                "bt709": 1,
+                "unknown": 2,
+                "unspecified": 2,
+
+                "bt470m": 4,
+                "bt470bg": 5,
+
+                # ffprobe may return bt601 or its historical aliases
+                "bt601": 6,
+                "smpte170m": 6,
+                "bt470bg": 5,
+
+                "smpte240m": 7,
+                "smpte240": 7,
+
+                "film": 8,
+                "bt2020": 9,
+
+                "smpte428": 10,   # XYZ / SMPTE 428
+                "xyz": 10,
+
+                "smpte431": 11,
+                "smpte432": 12,
+
+                "ebu3213": 22,
+            }
+            return mapping.get(n, 2)
+
+        def transfer_name_to_num(name: str) -> int:
+            """
+            ffprobe stream.color_transfer -> SVT-AV1 --transfer-characteristics number
+            """
+            if name is None:
+                return 2  # unspecified/default
+
+            n = name.strip().lower()
+
+            mapping = {
+                "bt709": 1,
+                "unknown": 2,
+                "unspecified": 2,
+
+                "bt470m": 4,
+                "bt470bg": 5,
+
+                "bt601": 6,
+                "smpte170m": 6,
+
+                "smpte240m": 7,
+                "smpte240": 7,
+
+                "linear": 8,
+                "log100": 9,
+                "log100-sqrt10": 10,
+
+                "iec61966-2-4": 11,
+                "iec61966": 11,
+
+                "bt1361": 12,
+
+                "iec61966-2-1": 13,  # ffprobe usually reports 'iec61966-2-1' for sRGB-ish
+                "srgb": 13,
+
+                "bt2020-10": 14,
+                "bt2020-12": 15,
+
+                "smpte2084": 16,     # PQ
+                "pq": 16,
+
+                "smpte428": 17,
+
+                # ffprobe uses 'arib-std-b67' for HLG
+                "arib-std-b67": 18,
+                "hlg": 18,
+            }
+            return mapping.get(n, 2)
+
+        def matrix_name_to_num(name: str) -> int:
+            """
+            ffprobe stream.color_space -> SVT-AV1 --matrix-coefficients number
+            """
+            if name is None:
+                return 2  # unspecified/default
+
+            n = name.strip().lower()
+
+            mapping = {
+                "rgb": 0,          # ffprobe sometimes reports rgb for identity
+                "identity": 0,
+
+                "bt709": 1,
+                "unknown": 2,
+                "unspecified": 2,
+
+                "fcc": 4,
+                "bt470bg": 5,
+
+                "bt601": 6,
+                "smpte170m": 6,
+
+                "smpte240m": 7,
+                "smpte240": 7,
+
+                "ycgco": 8,
+
+                # ffprobe uses these spellings
+                "bt2020nc": 9,
+                "bt2020-ncl": 9,
+
+                "bt2020c": 10,
+                "bt2020-cl": 10,
+
+                "smpte2085": 11,
+                "chroma-ncl": 12,
+                "chroma-cl": 13,
+
+                "ictcp": 14,
+            }
+            return mapping.get(n, 2)
+        
+        def chroma_sample_position_name_to_num(name: str) -> int:
+            """
+            ffprobe stream.chroma_location -> SVT-AV1 --chroma-sample-position number
+
+            SVT-AV1 options:
+            0: unknown/default
+            1: vertical/left
+            2: colocated/topleft
+            """
+            if name is None:
+                return 0
+
+            n = name.strip().lower()
+
+            mapping = {
+                "unspecified": 0,
+                "unknown": 0,
+
+                # ffprobe commonly returns these spellings
+                "left": 1,       # aka "vertical/left" in SVT docs
+                "topleft": 2,    # aka "colocated/topleft"
+
+                # Sometimes seen in other contexts; map conservatively
+                "center": 0,
+                "top": 0,
+                "bottom": 0,
+                "bottomleft": 0,
+            }
+            return mapping.get(n, 0)
+        
         logger.debug(f"[video_ffmpeg_AV1.SvtAv1EncApp_encode] Starting SVT-AV1 video encoding")
         logger.debug(f"[video_ffmpeg_AV1.SvtAv1EncApp_encode] Source: {VPC.source_path} -> Target: {VPC.target_path}")
         logger.debug(f"[video_ffmpeg_AV1.SvtAv1EncApp_encode] Encoding parameters - Target resolution: {VPC.output_res}, CQ: {VPC.output_cq}, Crop: {VPC.crop}")
 
+        if VPC.HDR_type == "HDR10":
+            VPC.HDR10_metadata_file
+
+        elif VPC.HDR_type == "DoVi":
+            VPC.dovi_metadata_file
+        
         ffmpeg_part = (
-            f"ffmpeg -i '{VPC.source_path}' "
+            f"ffmpeg -i {VPC.source_path} "
             "-pix_fmt yuv420p10le "       # 10-bit pixel format
             "-f yuv4mpegpipe -strict -1 " # Y4M pipe (carries metadata)
             "-an -sn "                    # No audio/subs
@@ -758,9 +925,41 @@ def video_ffmpeg_AV1(VPC: VideoProcessingConfig) -> bool:
         svt_part = (
             "SvtAv1EncApp -i stdin "      # Read from pipe
             "--input-depth 10 "           # Explicit 10-bit depth
-            "-b /workspace/video.ivf "    # Output IVF file
-            "--dolby-vision-rpu /workspace/dovi_rpu.bin"
+            f"--crf {str(VPC.output_cq)} "                     
+            f"--color-primaries {primaries_name_to_num(VPC.VUI["color_primaries"])} "
+            f"--transfer-characteristics {transfer_name_to_num(VPC.VUI["color_transfer"])} "
+            f"--matrix-coefficients {matrix_name_to_num(VPC.VUI["color_space"])} "
+            "--color-range 0 "
+            f"--chroma-sample-position {chroma_sample_position_name_to_num(VPC.VUI["chroma_location"])} "
+            f"-b {VPC.target_path}"    # Output IVF file
         )
+
+        video_profile = VPC.profile["video"].copy()
+        video_profile_str = ' '.join(video_profile)
+        svt_part = svt_part + " " + video_profile_str
+
+        if VPC.HDR_type is not ("None" or "uninit"):
+
+            if VPC.HDR_type == "HDR10":
+                svt_hdr_dynamic = (f"--hdr10plus-json {VPC.HDR10_metadata_file}") 
+
+            elif VPC.HDR_type == "DoVi":
+                svt_hdr_dynamic = (f"--dolby-vision-rpu {VPC.dovi_metadata_file}") 
+            
+            svt_part = svt_part + " " + svt_hdr_dynamic
+
+        if VPC.SideDTA["Cll_exists"] == True:
+            svt_part = svt_part + f" --content-light {VPC.SideDTA["max_content"]},{VPC.SideDTA["max_average"]}"
+
+        if VPC.SideDTA["Mastering_display_exists"] == True:
+            svt_part += (
+                f" --mastering-display "
+                f"'G({VPC.SideDTA['green_x']},{VPC.SideDTA['green_y']})"
+                f"B({VPC.SideDTA['blue_x']},{VPC.SideDTA['blue_y']})"
+                f"R({VPC.SideDTA['red_x']},{VPC.SideDTA['red_y']})"
+                f"WP({VPC.SideDTA['white_point_x']},{VPC.SideDTA['white_point_y']})"
+                f"L({VPC.SideDTA['max_luminance']},{VPC.SideDTA['min_luminance']})'"
+)
 
         # The final list calls /bin/sh to execute the pipe
         command = [
@@ -782,49 +981,79 @@ def video_ffmpeg_AV1(VPC: VideoProcessingConfig) -> bool:
         else:
             return False
 
+    def ivf_to_mkv(VPC: VideoProcessingConfig):
+        """
+        Convert IVF elementary stream to MKV container format.
+
+        This function performs a two-step conversion process to properly containerize
+        HEVC streams with correct timestamps and formatting.
+
+        Args:
+            VPC (VideoProcessingConfig): Video processing configuration
+
+        Returns:
+            bool: True if conversion succeeded, False otherwise
+        """
+
+        logger.debug(f"[video_ffmpeg_AV1.ivf_to_mkv] Converting .ivf to .mkv")
+        logger.debug(f"[video_ffmpeg_AV1.ivf_to_mkv] Source: {VPC.source_path} -> Target: {VPC.target_path}")
+
+        command = [
+            'mkvmerge',
+            '-o', VPC.target_path, 
+            '--default-duration', f'0:{VPC.orig_framerate}fps',
+            VPC.source_path         
+        ]
+
+        """
+        command = [
+            'ffmpeg', '-y',
+            '-fflags', '+genpts',
+            '-i', VPC.source_path,
+            '-c:v', 'copy',
+            '-an',
+            '-avoid_negative_ts', 'make_zero', 
+            '-bsf:v', 'av1_metadata=td=0', 
+            VPC.target_path
+        ]
+        """
+        
+        logger.debug(f"[video_ffmpeg_AV1.ivf_to_mkv] FFmpeg command: {' '.join(command)}")
+
+        if not execute(command):
+            logger.error("[video_ffmpeg_AV1.ivf_to_mkv] IVF to MKV failed")
+            return False
+        if not check_output(VPC.target_path):
+            logger.error("[video_ffmpeg_AV1.ivf_to_mkv] Conversion output validation failed")
+            return False
+        
+        logger.debug("[video_ffmpeg_AV1.ivf_to_mkv] IVF to MKV conversion completed successfully")
+        return True
 
     if VPC.profile["HDR_enable"][1]:
         logger.debug("[video_ffmpeg_AV1] HDR processing enabled - starting metadata workflow")
 
-        out = video_HDR_extract(VPC)
-        # Extract HDR metadata from source file
-        if out and (VPC.HDR_type != "None"):
-            
-            # Encode video to HEVC format
-            VPC.setTargetPath(os.path.join(VPC.workspace, VPC.output_file_name + "_reencode.ivf"))
-            if not SvtAv1EncApp_encode(VPC):
-                logger.error("[video_ffmpeg_AV1] FFmpeg encoding failed")
-                return False
-            delete_file(VPC, VPC.source_path)
+        if not video_HDR_extract(VPC):
+            logger.error("[video_ffmpeg_AV1] HDR metadata extraction failed")
+            return False
 
-            VPC.setSourcePath(VPC.target_path)
-
-            # Convert final HEVC to MKV container
-            VPC.setTargetPath(VPC.output_file_path)
-            if not hevc_to_mkv(VPC):
-                logger.error("[video_ffmpeg] HEVC to MKV conversion failed")
-                return False
-            delete_file(VPC, VPC.source_path)
-            
-        else: 
-            logger.error("[video_ffmpeg] HDR metadata extraction failed")
-            VPC.DisableParentHDR()
-            logger.debug("[video_ffmpeg] Standard encoding mode (no HDR processing)")
-            VPC.setTargetPath(VPC.output_file_path)
-            if not video_encode_ffmpeg(VPC):
-                logger.error("[video_ffmpeg] Standard FFmpeg encoding failed")
-                return False
-            delete_file(VPC, VPC.source_path)
-
-    else:
-
-        # Standard encoding without HDR processing
-        logger.debug("[video_ffmpeg] Standard encoding mode (no HDR processing)")
-        VPC.setTargetPath(VPC.output_file_path)
-        if not video_encode_ffmpeg(VPC):
-            logger.error("[video_ffmpeg] Standard FFmpeg encoding failed")
+        # Encode video to IVF format
+        VPC.setTargetPath(os.path.join(VPC.workspace, VPC.output_file_name + "_reencode.ivf"))
+        if not SvtAv1EncApp_encode(VPC):
+            logger.error("[video_ffmpeg_AV1] FFmpeg encoding failed")
             return False
         delete_file(VPC, VPC.source_path)
+
+        VPC.setSourcePath(VPC.target_path)
+
+        # Convert final HEVC to MKV container
+        VPC.setTargetPath(VPC.output_file_path)
+        if not ivf_to_mkv(VPC):
+            logger.error("[video_ffmpeg] IVF to MKV conversion failed")
+            return False
+        delete_file(VPC, VPC.source_path)
+
+
 
     logger.debug("[video_ffmpeg] FFmpeg encoding workflow completed successfully")
     return True
@@ -850,29 +1079,4 @@ def delete_file(VPC, file: str) -> None:
 
 if __name__ == '__main__':
 
-    workspace = r"D:\Files\Projects\AutoCompression\Tests\workspaces\DoVi_AV1"
-    #input_file = r"D:\Files\Projects\AutoCompression\Tests\HDR10_plus.mkv"
-    input_file = r"D:\Files\Projects\AutoCompression\Tests\DoVi.mkv"
-    profile_path = r"D:\Files\Projects\AutoCompression\Profiles\h265_slow_nvenc.yaml"
-    settings_path = r"D:\Files\Projects\AutoCompression\Profiles\Test_settings.yaml"
-    tools_path  = r"D:\Files\Projects\AutoCompression\tools"
-
-    if not os.path.exists(workspace):
-        os.makedirs(workspace)
-
-    log_path = os.path.join(workspace, "app.log")
-    logger = logger_setup.primary_logger(log_level=logging.INFO, log_file=log_path)
-    log_path = os.path.join(workspace, "stream.log")
-    stream_logger = logger_setup.file_logger(log_path, log_level=logging.DEBUG)
-
-    VPC = VideoProcessingConfig(input_file, "DoVi", workspace)
-    VPC.readProfiles(profile_path, settings_path, tools_path)
-    VPC.analyzeOriginal()
-
-    VPC.setDuration(1)
-    VPC.setStart(2)
-    VPC.setCrop([10, 10])
-    VPC.setOutputRes(720)
-    VPC.setOutputCQ(50)
-
-    compress(VPC)
+    None

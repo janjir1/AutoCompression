@@ -1,0 +1,30 @@
+# FFmpeg Encoding Settings
+function:
+ -function: ffmpeg_AV1
+
+HDR_enable:
+ -HDR_enable: true
+
+FS_enable: 
+ -FS_enable: true
+
+# Video settings
+video:
+  --preset: 3
+  --crf: 34
+  --variance-boost-strength: 2 # Protect textures
+  --film-grain: 12 # Mask banding/artifacts with light grain
+  --film-grain-denoise: 0 # Keep original detail
+  --hbd-mds: 1 # Slight sharpness bias
+  --enable-tf: 1 # Keep TF ON for efficiency (offset by grain synthesis)
+
+
+test_settings:
+ cq_threashold: 0.57
+ res_decode:
+  854: !!float -10
+  1280: !!float -1e-04
+  1920: !!float -6.9e-05
+  3840: !!float -3e-05
+ defalut_cq: 34
+ 
