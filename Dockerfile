@@ -1,5 +1,5 @@
 # 1. Start from NVIDIA CUDA base image (includes CUDA toolkit and headers)
-FROM nvidia/cuda:12.3.1-devel-ubuntu22.04
+FROM nvidia/cuda:12.8.1-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Europe/Prague
@@ -80,15 +80,19 @@ RUN git clone --depth 1 https://code.videolan.org/videolan/dav1d.git && \
 WORKDIR /tmp/dovi_tool
 RUN git clone --depth 1 https://github.com/quietvoid/dovi_tool.git . && \
     cd ./dolby_vision && \
-    cargo cinstall --release --prefix=/usr/local && \
-    ldconfig
+    cargo cinstall --release --prefix=/usr/local --libdir=/usr/local/lib && \
+    ldconfig && \
+    pkg-config --exists dovi && pkg-config --modversion dovi && \
+    ls -la /usr/local/lib/libdovi* /usr/local/lib/pkgconfig/dovi.pc
 
 # 2) Build + install libhdr10plus-rs (from hdr10plus_tool repo, hdr10plus subdir)
 WORKDIR /tmp/hdr10plus_tool
 RUN git clone --depth 1 https://github.com/quietvoid/hdr10plus_tool.git . && \
     cd ./hdr10plus && \
-    cargo cinstall --release --prefix=/usr/local && \
-    ldconfig
+    cargo cinstall --release --prefix=/usr/local --libdir=/usr/local/lib && \
+    ldconfig && \
+    pkg-config --exists hdr10plus-rs && pkg-config --modversion hdr10plus-rs && \
+    ls -la /usr/local/lib/libhdr10plus* /usr/local/lib/pkgconfig/hdr10plus-rs.pc
 
 # Build and install SVT-AV1-HDR (libsvtav1)
 WORKDIR /tmp/svtav1hdr
@@ -168,7 +172,7 @@ RUN rm -rf /tmp/ffmpeg-build /tmp/x265-build /tmp/vmaf-build /tmp/nv-codec && \
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
 
 
-ARG DOVI_TOOL_VERSION=2.3.1
+ARG DOVI_TOOL_VERSION=2.3.3
 RUN wget -q https://github.com/quietvoid/dovi_tool/releases/download/${DOVI_TOOL_VERSION}/dovi_tool-${DOVI_TOOL_VERSION}-x86_64-unknown-linux-musl.tar.gz && \
     tar -xzf dovi_tool-${DOVI_TOOL_VERSION}-x86_64-unknown-linux-musl.tar.gz && \
     mv dovi_tool /usr/local/bin/ && \
@@ -176,7 +180,7 @@ RUN wget -q https://github.com/quietvoid/dovi_tool/releases/download/${DOVI_TOOL
     chmod +x /usr/local/bin/dovi_tool
 
 # Download and install hdr10plus_tool
-ARG HDR10PLUS_TOOL_VERSION=1.7.1
+ARG HDR10PLUS_TOOL_VERSION=1.7.2
 RUN wget -q https://github.com/quietvoid/hdr10plus_tool/releases/download/${HDR10PLUS_TOOL_VERSION}/hdr10plus_tool-${HDR10PLUS_TOOL_VERSION}-x86_64-unknown-linux-musl.tar.gz && \
     tar -xzf hdr10plus_tool-${HDR10PLUS_TOOL_VERSION}-x86_64-unknown-linux-musl.tar.gz && \
     mv hdr10plus_tool /usr/local/bin/ && \

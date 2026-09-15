@@ -2,6 +2,7 @@ from encodings.punycode import T
 import shutil
 import subprocess, os, json
 import logging
+import signal
 
 from sympy import false
 import AVTest
@@ -13,6 +14,8 @@ from VideoClass import VideoProcessingConfig
 # Retrieve the logger once at the module level
 logger = logging.getLogger("AppLogger")
 stream_logger = logging.getLogger("FileLogger")
+
+max_timeout = 604800
 
 
 def compress(VPC: VideoProcessingConfig) -> bool:
@@ -78,7 +81,7 @@ def compress(VPC: VideoProcessingConfig) -> bool:
     
     return success
 
-def execute(command: list) -> bool:
+def execute(command: list, timeout: int = 3600) -> bool:
     """
     Execute a command using subprocess with real-time logging of stdout and stderr.
 
@@ -87,7 +90,7 @@ def execute(command: list) -> bool:
 
     Args:
         command (list): Command and arguments to execute as a list
-
+        timeout (int): Timeout in seconds for the process
     Returns:
         bool: True if process finished successfully (exit code 0), False otherwise
     """
@@ -99,7 +102,8 @@ def execute(command: list) -> bool:
         command,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        universal_newlines=False  # Handle decoding manually
+        universal_newlines=False,  # Handle decoding manually
+        start_new_session=True   # puts process + all its children in a new process group
     )
 
     # Create a dedicated file logger for stream logging
@@ -163,7 +167,19 @@ def execute(command: list) -> bool:
 
     # Wait for completion
     logger.debug(f"[execute] Waiting for process completion")
-    process.wait()
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        logger.error(f"[execute] Process exceeded {timeout}s timeout, terminating")
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)  # kill shell + ffmpeg + SvtAv1EncApp together
+        except ProcessLookupError:
+            pass  # already dead
+        process.wait()
+        stdout_thread.join(timeout=5)
+        stderr_thread.join(timeout=5)
+        return False
+    
     stdout_thread.join()
     stderr_thread.join()
 
@@ -210,7 +226,7 @@ def check_output(file_path: str, size_limit=2048) -> bool:
         return False
 
 
-def temporal_crop(VPC: VideoProcessingConfig, NoFS_offset: int = 3) -> bool:
+def temporal_crop(VPC: VideoProcessingConfig, NoFS_offset: int = 6) -> bool:
 
     """
     Perform temporal cropping (time-based cutting) of video files using FFmpeg.
@@ -314,7 +330,9 @@ def video_HandbrakeAV1(VPC: VideoProcessingConfig) -> bool:
 
     logger.debug(f"[video_HandbrakeAV1] Complete HandBrake command: {' '.join(command)}")
 
-    if execute(command):
+    timeout = max_timeout if VPC.is_final_export else 3600
+
+    if execute(command, timeout=timeout):
         if check_output(VPC.output_file_path):
             logger.debug(f"HandBrake AV1 encoding completed successfully: {VPC.output_file_path}")
             return True
@@ -352,7 +370,7 @@ def get_video_metadata_type(VPC: VideoProcessingConfig):
         # Try Dolby Vision first
         logger.debug("[video_ffmpeg.get_video_metadata_type] Attempting Dolby Vision metadata extraction")
         dovi_tool_path = "dovi_tool"
-        dovi = [f"{dovi_tool_path}", "extract-rpu", "-i", f"{VPC.source_path}", "-o", f"{VPC.dovi_metadata_file}"]
+        dovi = [f"{dovi_tool_path}", "-m", "2", "extract-rpu", "-i", f"{VPC.source_path}", "-o", f"{VPC.dovi_metadata_file}"]
         logger.debug(f"[video_ffmpeg.get_video_metadata_type] DoVi extraction command: {' '.join(dovi)}")
 
         if not execute(dovi):
@@ -385,6 +403,24 @@ def get_video_metadata_type(VPC: VideoProcessingConfig):
         logger.debug(f"[video_ffmpeg.get_video_metadata_type] Using cached metadata type: {VPC.HDR_type}")
         return True
 
+def crop_dovi_rpu(VPC: VideoProcessingConfig) -> bool:
+    """Update DoVi RPU active-area metadata to match applied crop."""
+    #TODO: needs testing
+    if VPC.crop == [0, 0]:
+        return True  # nothing to adjust
+
+    edit_config = {"active_area": {"crop": True}}
+    edit_config_path = os.path.join(VPC.workspace, "dovi_edit.json")
+    with open(edit_config_path, "w") as f:
+        json.dump(edit_config, f)
+
+    command = ["dovi_tool", "editor", "-i", VPC.dovi_metadata_file, "-j", edit_config_path, "-o", VPC.dovi_metadata_file]
+    logger.debug(f"[crop_dovi_rpu] Command: {' '.join(command)}")
+    if not execute(command):
+        logger.error("[crop_dovi_rpu] DoVi RPU crop edit failed")
+        return False
+    return check_output(VPC.dovi_metadata_file)
+
 def video_HDR_extract(VPC: VideoProcessingConfig):
     """
     Extract HDR metadata from video files based on the previously detected metadata type.
@@ -401,8 +437,6 @@ def video_HDR_extract(VPC: VideoProcessingConfig):
 
     """
 
-    #TODO spatial crop for dovi
-
     logger.debug(f"[video_ffmpeg.video_HDR_extract] Starting HDR metadata extraction for: {VPC.source_path}")
     logger.debug(f"[video_ffmpeg.video_HDR_extract] Metadata type: {VPC.HDR_type}")
     logger.debug(f"[video_ffmpeg.video_HDR_extract] Output paths - DoVi: {VPC.dovi_metadata_file}, HDR10+: {VPC.HDR10_metadata_file}")
@@ -418,11 +452,14 @@ def video_HDR_extract(VPC: VideoProcessingConfig):
         dovi = [f"{dovi_tool_path}", "extract-rpu", "-i", f"{VPC.source_path}", "-o", f"{VPC.dovi_metadata_file}"]
         logger.debug(f"[video_ffmpeg.video_HDR_extract] DoVi extraction command: {' '.join(dovi)}")
 
-        if not execute(dovi):
+        if not execute(dovi, timeout=3600*4):
             logger.error("[video_ffmpeg.video_HDR_extract] DoVi extraction failed")
             return False
         if not check_output(VPC.dovi_metadata_file):
             logger.error("[video_ffmpeg.video_HDR_extract] DoVi metadata file validation failed")
+            return False
+        if not crop_dovi_rpu(VPC):
+            logger.error("[video_ffmpeg.video_HDR_extract] DoVi RPU crop adjustment failed")
             return False
         return True
     
@@ -432,7 +469,7 @@ def video_HDR_extract(VPC: VideoProcessingConfig):
         HDR10plus = [f"{HDR10plus_tool_path}", "extract", f"{VPC.source_path}", "-o", f"{VPC.HDR10_metadata_file}"]
         logger.debug(f"[video_ffmpeg.video_HDR_extract] HDR10+ extraction command: {' '.join(HDR10plus)}")
 
-        if not execute(HDR10plus):
+        if not execute(HDR10plus, timeout=3600*4):
             logger.error("[video_ffmpeg.video_HDR_extract] HDR10+ extraction failed")
             return False
         if not check_output(VPC.HDR10_metadata_file):
@@ -478,8 +515,8 @@ def elementary_to_mkv(VPC: VideoProcessingConfig):
     ]
     
     logger.debug(f"[compressor.elementary_to_mkv] FFmpeg command: {' '.join(command)}")
-
-    if not execute(command):
+    timeout = 6*3600 if VPC.is_final_export else 3600
+    if not execute(command, timeout=timeout):
         logger.error("[compressor.elementary_to_mkv] IVF to MKV failed")
         return False
     if not check_output(VPC.target_path):
@@ -491,8 +528,14 @@ def elementary_to_mkv(VPC: VideoProcessingConfig):
 
 def vfCropComandGenerator(VPC: VideoProcessingConfig) -> str:
     target_v_res = VPC.orig_v_res - VPC.crop[0] - VPC.crop[1]
-    command = f"crop={VPC.orig_h_res}:{target_v_res}:0:{VPC.crop[0]},scale={VPC.output_res}:-2"
-    logger.debug(f"[video_ffmpeg.video_encode_ffmpeg.vfCropComandGenerator] Generated filter: {command}")
+    if target_v_res <= 0:
+        logger.error(f"[vfCropComandGenerator] Invalid crop: orig_v_res={VPC.orig_v_res}, crop={VPC.crop} produces non-positive height ({target_v_res})")
+        target_v_res = VPC.orig_v_res
+        VPC.crop = [0, 0]
+        logger.warning("[vfCropComandGenerator] Falling back to uncropped resolution")
+
+    command = f"crop={VPC.orig_h_res}:{target_v_res}:0:{VPC.crop[0]},scale={VPC.output_res}:-2:flags=lanczos+accurate_rnd"
+    logger.debug(f"[vfCropComandGenerator] Generated filter: {command}")
     return command
 
 def video_ffmpeg_h265(VPC: VideoProcessingConfig) -> bool:
@@ -627,7 +670,8 @@ def video_ffmpeg_h265(VPC: VideoProcessingConfig) -> bool:
         logger.debug(f"[video_ffmpeg.video_encode_ffmpeg] Complete FFmpeg command: {' '.join(command)}")
         logger.debug("[video_ffmpeg.video_encode_ffmpeg] Starting FFmpeg encoding process")
 
-        if execute(command):
+        timeout = max_timeout if VPC.is_final_export else 3600
+        if execute(command, timeout=timeout):
             if check_output(VPC.target_path):
                 logger.debug("[video_ffmpeg.video_encode_ffmpeg] FFmpeg encoding completed successfully")
                 return True
@@ -752,7 +796,11 @@ def video_ffmpeg_AV1(VPC: VideoProcessingConfig) -> bool:
 
                 "ebu3213": 22,
             }
-            return mapping.get(n, 2)
+            result = mapping.get(n, None)
+            if result is None:
+                logger.warning(f"[primaries_name_to_num] Unrecognized color_primaries value '{name}', defaulting to unspecified (2)")
+                return 2
+            return result
 
         def transfer_name_to_num(name: str) -> int:
             """
@@ -934,7 +982,7 @@ def video_ffmpeg_AV1(VPC: VideoProcessingConfig) -> bool:
                 f"R({VPC.SideDTA['red_x']},{VPC.SideDTA['red_y']})"
                 f"WP({VPC.SideDTA['white_point_x']},{VPC.SideDTA['white_point_y']})"
                 f"L({VPC.SideDTA['max_luminance']},{VPC.SideDTA['min_luminance']})'"
-)
+            )
 
         # The final list calls /bin/sh to execute the pipe
         command = [
@@ -946,7 +994,8 @@ def video_ffmpeg_AV1(VPC: VideoProcessingConfig) -> bool:
         logger.debug(f"[video_ffmpeg_AV1.SvtAv1EncApp_encode] Complete FFmpeg command: {' '.join(command)}")
         logger.debug("[video_ffmpeg_AV1.SvtAv1EncApp_encode] Starting FFmpeg encoding process")
 
-        if execute(command):
+        timeout = max_timeout if VPC.is_final_export else 3600
+        if execute(command, timeout=timeout):
             if check_output(VPC.target_path):
                 logger.debug("[video_ffmpeg_AV1.SvtAv1EncApp_encode] FFmpeg encoding completed successfully")
                 return True
@@ -956,39 +1005,34 @@ def video_ffmpeg_AV1(VPC: VideoProcessingConfig) -> bool:
         else:
             return False
 
-    if VPC.profile["HDR_enable"][1]:
-        logger.debug("[video_ffmpeg_AV1] HDR processing enabled - starting metadata workflow")
+    
+    logger.debug("[video_ffmpeg_AV1] HDR processing enabled - starting metadata workflow")
 
-        if not video_HDR_extract(VPC):
-            logger.error("[video_ffmpeg_AV1] HDR metadata extraction failed")
-            return False
+    if not video_HDR_extract(VPC):
+        logger.error("[video_ffmpeg_AV1] HDR metadata extraction failed")
+        return False
 
-        # Encode video to IVF format
-        VPC.setTargetPath(os.path.join(VPC.workspace, VPC.output_file_name + "_reencode.ivf"))
-        if not SvtAv1EncApp_encode(VPC):
-            logger.error("[video_ffmpeg_AV1] FFmpeg encoding failed")
-            return False
-        delete_file(VPC, VPC.source_path)
+    # Encode video to IVF format
+    VPC.setTargetPath(os.path.join(VPC.workspace, VPC.output_file_name + "_reencode.ivf"))
+    if not SvtAv1EncApp_encode(VPC):
+        logger.error("[video_ffmpeg_AV1] FFmpeg encoding failed")
+        return False
+    delete_file(VPC, VPC.source_path)
 
-        VPC.setSourcePath(VPC.target_path)
+    VPC.setSourcePath(VPC.target_path)
 
-        # Convert final HEVC to MKV container
-        VPC.setTargetPath(VPC.output_file_path)
-        if not elementary_to_mkv(VPC):
-            logger.error("[video_ffmpeg] IVF to MKV conversion failed")
-            return False
-        delete_file(VPC, VPC.source_path)
+    # Convert final HEVC to MKV container
+    VPC.setTargetPath(VPC.output_file_path)
+    if not elementary_to_mkv(VPC):
+        logger.error("[video_ffmpeg] IVF to MKV conversion failed")
+        return False
+    delete_file(VPC, VPC.source_path)
 
 
 
     logger.debug("[video_ffmpeg] FFmpeg encoding workflow completed successfully")
     return True
 
-#TODO
-#new ffmpeg + svt-av1-hdr function here
-#basic commands:
-#ffmpeg -i /input/DoVi.mkv -pix_fmt yuv420p10le -f rawvideo - | SvtAv1EncApp -i /workspace/input.yuv -w 3840 -h 2160 -b /workspace/video.ivf --dolby-vision-rpu /workspace/dovi_rpu.bin
-#ffmpeg -i video.ivf -c:v copy -an video.mkv
 
 def delete_file(VPC, file: str) -> None:
     if VPC.test_settings["Enable_delete"]["Enabled"]:

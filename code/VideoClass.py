@@ -46,6 +46,7 @@ class VideoProcessingConfig:
         self.workspace = workspace
         self.output_file_path = os.path.join(self.workspace, self.output_file_name) + ".mkv"   
         self.parent = None
+        self.is_final_export = False
 
         if not os.path.exists(workspace):
             os.makedirs(workspace)
@@ -95,7 +96,13 @@ class VideoProcessingConfig:
         self.target_res = self.orig_h_res
         self.output_res = self.orig_h_res
 
-        self.VUI, self.SideDTA = get_static_metadata(self.orig_file_path)
+        metadata = get_static_metadata(self.orig_file_path)
+        if metadata is None:
+            logger.warning(f"[analyzeOriginal] Failed to extract static metadata for {self.orig_file_path}; using defaults")
+            self.VUI = {"color_primaries": "unknown", "color_space": "unknown", "color_transfer": "unknown", "chroma_location": "unknown"}
+            self.SideDTA = {"Cll_exists": False, "Mastering_display_exists": False}
+        else:
+            self.VUI, self.SideDTA = metadata
 
 
     def create_copy(self):

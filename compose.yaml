@@ -30,6 +30,7 @@ services:
       - ./code:/app/code:cached
       - ./Profiles:/app/Profiles:cached
       - ./FastVQA-and-FasterVQA:/app/FastVQA-and-FasterVQA:cached
+      - "E:/Filmy:/films"
     deploy:
       resources:
         reservations:

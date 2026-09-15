@@ -35,6 +35,7 @@ def compressAV(VPC: VideoProcessingConfig) -> bool:
     VPC.export_to_txt()
     
     if VPC.test_settings["Export_output"]["Enabled"]:
+        VPC.is_final_export = True
         result = compressor2.compress(VPC)
         if not result:
             logger.info(f"Conversion failed")
@@ -70,7 +71,10 @@ def init(file, file_name, profile_path, settings_path, workspaces, tools_path) -
 
     VPC.setSourcePath(VPC.orig_file_path)
 
-    compressor2.get_video_metadata_type(VPC)
+    if VPC.profile["HDR_enable"][1] == True:
+        compressor2.get_video_metadata_type(VPC)
+    else:
+        VPC.HDR_type = "None"
 
     return VPC, logger, stream_logger
 

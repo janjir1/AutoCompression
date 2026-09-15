@@ -401,7 +401,7 @@ def getCQ(VPC: VideoProcessingConfig) -> bool:
             logger.error("Media creation failed")
             return False
         reference_files.append(cq_VPC.output_file_path)
-    reference_files.sort() #this will break with 9 or more scenes
+    reference_files.sort(key=lambda f: int(os.path.basename(f).split("_")[0]))
 
     results = dict()
 
@@ -442,6 +442,9 @@ def getCQ(VPC: VideoProcessingConfig) -> bool:
     #calculate VMAF difference to cq15
     subtracted_results = dict()
     for scene, vmaf_data in results.items():
+        if any(vmaf_data.get(cq) is None for cq in cq_values):
+            logger.warning(f"[getCQ] Incomplete VMAF data for scene {scene}, skipping")
+            continue
         subtracted_results[scene] = {
             cq_values[0]: 0,
             cq_values[1]: vmaf_data[cq_values[0]] - vmaf_data[cq_values[1]],
