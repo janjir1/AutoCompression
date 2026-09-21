@@ -15,7 +15,7 @@ declare -A tests
 
 # Add your tests here
 #tests["Dune1"]="/films/4K/Dune1.mkv"
-tests["Dune2"]="/films/4K/Dune.Part.Two.mkv"
+tests["Dune2_new"]="/films/4K/Dune.Part.Two.mkv"
 #tests["SpidermanNWH"]="/films/4K/Spider-Man.No.Way.Home.2022.2160p.UHD.BluRay.TrueHD.7.1.Atmos.HDR.x265-EVO.mkv"
 #tests["Oppenheimer"]="/films/4K/Oppenheimer.2023.2160p.mkv"
 #tests["Bitva"]="/films/hrané/Action/300 Bitva u Thermopyl HD.mkv"

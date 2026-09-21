@@ -514,6 +514,7 @@ def _createAndTestVMAF(VPC: VideoProcessingConfig, reference_video: Union[str, N
         return None, passed
 
 #region Num of Channels
+"""
 def getNumOfChannels(
     orig_video_path: str, 
     workspace: str, 
@@ -521,7 +522,7 @@ def getNumOfChannels(
     duration: int = 1200
 ) -> int:
     
-    """
+    
     Determines the number of unique audio channels in a video file.
 
     Parameters:
@@ -532,7 +533,7 @@ def getNumOfChannels(
 
     Returns:
     - int: Number of unique channels (1, 2, 4, or 6).
-    """
+    
 
     name = str(os.path.basename(orig_video_path)[:-4]) + "_channels"
     work_folder = os.path.join(workspace, name)
@@ -592,6 +593,7 @@ def getNumOfChannels(
         if len(output) >= 5:
             return 6
         return len(output)
+        """
 
 def _extractAudio(orig_video_path: str, work_folder: str, duration: int) -> str:
     """

@@ -1,32 +1,26 @@
 Black_bar_detection:
-  Enabled: false
-  frames_to_detect: 10
+  Enabled: true
+  frames_to_detect: 2
 
 Resolution_calculation:
   Enabled: true
-  testing_resolutions:
-    - 854
-    - 3840
-  num_of_tests: 15 #15
+  testing_resolutions: [854, 1920]
+  num_of_tests: 3
   scene_length: 1
-  cq_value: 5
+  cq_value: 20
   VQA_per_test: 3
-  keep_best_slopes: 0.6
-  Threads: 3
+  keep_best_slopes: 1.0
+  Threads: 5
 
 CQ_calculation:
   Enabled: true
-  cq_values:
-    - 20 #15
-    - 28 #18
-    - 35 #27
-    - 45 #36
-  number_of_scenes: 3 #3
+  cq_values: [20, 30, 40, 50]
+  number_of_scenes: 1
   cq_reference: 5
-  scene_length: 50 #50
-  keep_best_scenes: 0.6
-  threads: 6
-  
+  scene_length: 2
+  keep_best_scenes: 1.0
+  threads: 5
+
 Channels_calculation:
   Enabled: false
   simmilarity_cutoff: 0.001

@@ -54,3 +54,4 @@ FastVQA-and-FasterVQA/**
 workspace/
 tools/
 Tests/
+!code/tests/

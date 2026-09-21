@@ -367,10 +367,17 @@ def get_video_metadata_type(VPC: VideoProcessingConfig):
         logger.debug(f"[video_ffmpeg.get_video_metadata_type] Output paths - DoVi: {VPC.dovi_metadata_file}, HDR10+: {VPC.HDR10_metadata_file}")
         logger.debug("[video_ffmpeg.get_video_metadata_type] Metadata type not cached, performing detection")
 
+        frame_limit = VPC.test_settings["HDR_test_frame_limit"]["frame_limit"] if VPC.test_settings["HDR_test_frame_limit"]["Enabled"] else None
+
         # Try Dolby Vision first
         logger.debug("[video_ffmpeg.get_video_metadata_type] Attempting Dolby Vision metadata extraction")
         dovi_tool_path = "dovi_tool"
-        dovi = [f"{dovi_tool_path}", "-m", "2", "extract-rpu", "-i", f"{VPC.source_path}", "-o", f"{VPC.dovi_metadata_file}"]
+
+        if frame_limit is not None:
+            dovi = [f"{dovi_tool_path}", "-m", "2", "extract-rpu", "-i", f"{VPC.source_path}",
+            "-o", f"{VPC.dovi_metadata_file}", "--limit", str(frame_limit)]
+        else:
+            dovi = [f"{dovi_tool_path}", "-m", "2", "extract-rpu", "-i", f"{VPC.source_path}", "-o", f"{VPC.dovi_metadata_file}"]
         logger.debug(f"[video_ffmpeg.get_video_metadata_type] DoVi extraction command: {' '.join(dovi)}")
 
         if not execute(dovi):
@@ -385,7 +392,10 @@ def get_video_metadata_type(VPC: VideoProcessingConfig):
             # Try HDR10+ as fallback
             logger.debug("[video_ffmpeg.get_video_metadata_type] Dolby Vision not detected, attempting HDR10+ metadata extraction")
             HDR10plus_tool_path = "hdr10plus_tool"
-            HDR10plus = [f"{HDR10plus_tool_path}", "extract", f"{VPC.source_path}", "-o", f"{VPC.HDR10_metadata_file}"]
+            if frame_limit is not None:
+                HDR10plus = [f"{HDR10plus_tool_path}", "extract", f"{VPC.source_path}", "-o", f"{VPC.HDR10_metadata_file}", "--limit", str(frame_limit)]
+            else:
+                HDR10plus = [f"{HDR10plus_tool_path}", "extract", f"{VPC.source_path}", "-o", f"{VPC.HDR10_metadata_file}"]
             logger.debug(f"[video_ffmpeg.get_video_metadata_type] HDR10+ extraction command: {' '.join(HDR10plus)}")
 
             if not execute(HDR10plus):
