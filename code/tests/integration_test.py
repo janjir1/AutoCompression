@@ -2,7 +2,7 @@ import pytest
 import subprocess
 import json
 import os
-import logging
+
 from compressor2 import compress, get_video_metadata_type
 from VideoClass import VideoProcessingConfig
 import AVTest
@@ -20,72 +20,174 @@ FAST_SETTINGS = os.path.join(os.path.dirname(__file__), "fast_test_settings.yaml
 # ---------------------------------------------------------------------------
 # Pipeline case configuration.
 #
-# Add a new entry here to run the full pipeline against another source /
-# profile combination -- no new test code required.
+# Naming convention: {source_codec}_to_{target_codec}_{hdr_label}
+#   source_codec : h265 | h264           -- codec of the synthetic source clip
+#   target_codec : av1 | h265            -- codec produced by the profile
+#   hdr_label    : dovi | hdr10plus | sdr -- HDR metadata carried by the source
 #
-#   id                 : short label, shows up in test names as [id]
+# Add a new entry here to run the full pipeline against another source /
+# profile combination -- no new test code required. A dedicated test class
+# is generated per entry below (see _make_pipeline_test_class), so each case
+# shows up as its own top-level node in the Testing tab, with test_01/02/03
+# nested underneath it.
+#
+#   id                 : short label -- becomes the generated class name
 #   file_fixture       : name of a conftest.py fixture that returns a path
 #                        to the source clip to use for this case
 #   profile            : path to the encode profile yaml, relative to repo root
 #   expected_hdr_type  : value VPC.HDR_type must equal after detection
 #   valid_resolutions  : acceptable values for VPC.output_res after calibration
+#   expected_crop      : expected [top, bottom] crop VPC.crop must equal
 #   expected_duration  : expected output duration in seconds (tolerance applied)
 #   duration_tolerance : +/- seconds allowed around expected_duration
+#   is_H265            : expected value of VPC.is_H265 for the source clip
+#   expected_codec     : ffprobe codec_name the final output must report
 # ---------------------------------------------------------------------------
 PIPELINE_CASES = [
+    # --- AV1 output (Profiles/AV1_svt_archive_sw.yaml) ---
     {
-        "id": "dovi_1080p",
+        "id": "h265_to_av1_dovi",
         "file_fixture": "synthetic_dovi_clip",
         "profile": "Profiles/AV1_svt_archive_sw.yaml",
         "expected_hdr_type": "DoVi",
         "valid_resolutions": [854, 1280, 1920],
+        "expected_crop": [140, 140],
         "expected_duration": 10.0,
         "duration_tolerance": 2.0,
+        "is_H265": True,
+        "expected_codec": "av1",
+    },
+    {
+        "id": "h265_to_av1_hdr10plus",
+        "file_fixture": "synthetic_hdr10plus_clip",
+        "profile": "Profiles/AV1_svt_archive_sw.yaml",
+        "expected_hdr_type": "HDR10",
+        "valid_resolutions": [854, 1280, 1920],
+        "expected_crop": [140, 140],
+        "expected_duration": 10.0,
+        "duration_tolerance": 2.0,
+        "is_H265": True,
+        "expected_codec": "av1",
+    },
+    {
+        "id": "h265_to_av1_sdr",
+        "file_fixture": "synthetic_sdr_h265_clip",
+        "profile": "Profiles/AV1_svt_archive_sw.yaml",
+        "expected_hdr_type": "None",
+        "valid_resolutions": [854, 1280, 1920],
+        "expected_crop": [140, 140],
+        "expected_duration": 10.0,
+        "duration_tolerance": 2.0,
+        "is_H265": True,
+        "expected_codec": "av1",
+    },
+    {
+        "id": "h264_to_av1_sdr",
+        "file_fixture": "synthetic_h264_clip",
+        "profile": "Profiles/AV1_svt_archive_sw.yaml",
+        "expected_hdr_type": "None",
+        "valid_resolutions": [854, 1280, 1920],
+        "expected_crop": [140, 140],
+        "expected_duration": 10.0,
+        "duration_tolerance": 2.0,
+        "is_H265": False,
+        "expected_codec": "av1",
+    },
+
+    # --- H.265 output (Profiles/h265_slow_nvenc.yaml) ---
+    {
+        "id": "h265_to_h265_dovi",
+        "file_fixture": "synthetic_dovi_clip",
+        "profile": "Profiles/h265_slow_nvenc.yaml",
+        "expected_hdr_type": "DoVi",
+        "valid_resolutions": [854, 1280, 1920],
+        "expected_crop": [140, 140],
+        "expected_duration": 10.0,
+        "duration_tolerance": 2.0,
+        "is_H265": True,
+        "expected_codec": "hevc",
+    },
+    {
+        "id": "h265_to_h265_hdr10plus",
+        "file_fixture": "synthetic_hdr10plus_clip",
+        "profile": "Profiles/h265_slow_nvenc.yaml",
+        "expected_hdr_type": "HDR10",
+        "valid_resolutions": [854, 1280, 1920],
+        "expected_crop": [140, 140],
+        "expected_duration": 10.0,
+        "duration_tolerance": 2.0,
+        "is_H265": True,
+        "expected_codec": "hevc",
+    },
+    {
+        "id": "h265_to_h265_sdr",
+        "file_fixture": "synthetic_sdr_h265_clip",
+        "profile": "Profiles/h265_slow_nvenc.yaml",
+        "expected_hdr_type": "None",
+        "valid_resolutions": [854, 1280, 1920],
+        "expected_crop": [140, 140],
+        "expected_duration": 10.0,
+        "duration_tolerance": 2.0,
+        "is_H265": True,
+        "expected_codec": "hevc",
+    },
+    {
+        "id": "h264_to_h265_sdr",
+        "file_fixture": "synthetic_h264_clip",
+        "profile": "Profiles/h265_slow_nvenc.yaml",
+        "expected_hdr_type": "None",
+        "valid_resolutions": [854, 1280, 1920],
+        "expected_crop": [140, 140],
+        "expected_duration": 10.0,
+        "duration_tolerance": 2.0,
+        "is_H265": False,
+        "expected_codec": "hevc",
     },
 ]
 
 
+class _PipelineTestBase:
+    """Shared implementation for all per-case pipeline test classes.
 
-@pytest.mark.parametrize(
-    "case",
-    PIPELINE_CASES,
-    ids=[c["id"] for c in PIPELINE_CASES],
-    scope="class", 
-)
-class TestPipeline:
-    """Full pipeline: HDR detection -> calibration (VQA/VMAF) -> crop -> AV1 encode -> mkv.
+    A dedicated subclass is generated per PIPELINE_CASES entry (see
+    _make_pipeline_test_class / the loop at the bottom of this file), each
+    with its own fixed `case` class attribute. This is what makes each case
+    show up as its own top-level class node in the Testing tab, with
+    test_01/02/03 nested underneath it, instead of grouping by test method
+    first (which is what plain @pytest.mark.parametrize on the class gives
+    you).
 
-    Parametrized by PIPELINE_CASES above. Each case gets its own isolated
-    VideoProcessingConfig, built once in setup_case and shared across
-    test_01/02/03 within that case.
+    test_01/02/03 bodies are unchanged from the parametrized version --
+    every `case` argument just became `self.case`.
     """
 
+    case = None  # overridden per-case by the generated subclasses below
+
     @pytest.fixture(scope="class", autouse=True)
-    def setup_case(self, request, case, tmp_path_factory):
+    def setup_case(self, request, tmp_path_factory):
+        case = self.case
         source_path = request.getfixturevalue(case["file_fixture"])
         workspace = str(tmp_path_factory.mktemp(f"case_{case['id']}"))
 
         vpc = VideoProcessingConfig(source_path, f"pipeline_case_{case['id']}", workspace)
         vpc.readProfiles(case["profile"], FAST_SETTINGS, None)
+
+        assert "HDR_enable" in vpc.profile, (
+            f"Profile {case['profile']!r} for case {case['id']!r} is missing 'HDR_enable' — "
+            f"wrong profile file specified?"
+        )
+
         vpc.analyzeOriginal()
         vpc.setSourcePath(vpc.orig_file_path)
 
         request.cls.vpc = vpc
-        request.cls.case = case
 
-    @pytest.fixture(autouse=True)
-    def print_warnings_and_above(self, caplog):
-        caplog.set_level(logging.WARNING)
-        yield
-        flagged = [r for r in caplog.records if r.levelno >= logging.WARNING]
-        if flagged:
-            print(f"\n--- {len(flagged)} warning(s)/error(s) logged during this test ---")
-            for r in flagged:
-                print(f"[{r.levelname}] {r.name}: {r.message}")
-
-    def test_01_hdr_detection(self, case):
+    def test_01_hdr_detection(self):
+        case = self.case
         vpc = self.vpc
-        assert vpc.is_H265 == True, "Source must be detected as H.265 for HDR gating to activate"
+        assert vpc.is_H265 == case["is_H265"], (
+            f"Expected is_H265={case['is_H265']!r} for source, got {vpc.is_H265!r}"
+        )
 
         if vpc.profile["HDR_enable"][1] == True:
             get_video_metadata_type(vpc)
@@ -96,29 +198,36 @@ class TestPipeline:
             f"Expected HDR_type={case['expected_hdr_type']!r}, got {vpc.HDR_type!r}"
         )
 
-    def test_02_calibration(self, case):
+    def test_02_calibration(self):
+        case = self.case
         vpc = self.vpc
         passed = AVTest.runTests(vpc)
         assert passed == True, "Calibration stage (black bars / VQA / VMAF) failed"
 
-        print(f"[{case['id']}] output_res={vpc.output_res}, output_cq={vpc.output_cq}")
+        print(f"[{case['id']}] output_res={vpc.output_res}, output_cq={vpc.output_cq}, crop={vpc.crop}")
 
         assert isinstance(vpc.crop, list) and len(vpc.crop) == 2
+        assert vpc.crop == case["expected_crop"], (
+            f"Expected crop {case['expected_crop']} for letterboxed source, got {vpc.crop}"
+        )
         assert vpc.output_res in case["valid_resolutions"], (
             f"Calibrated resolution {vpc.output_res} not in expected set {case['valid_resolutions']}"
         )
         assert isinstance(vpc.output_cq, (int, float)) and vpc.output_cq > 0
 
-    def test_03_final_encode(self, case):
+    def test_03_final_encode(self):
+        case = self.case
         vpc = self.vpc
         vpc.is_final_export = True
         result = compress(vpc)
-        assert result == True, "Final AV1 encode failed"
+        assert result == True, "Final encode failed"
         assert os.path.isfile(vpc.output_file_path)
 
         info = ffprobe_info(vpc.output_file_path)
         video_stream = next(s for s in info["streams"] if s["codec_type"] == "video")
-        assert video_stream["codec_name"] == "av1"
+        assert video_stream["codec_name"] == case["expected_codec"], (
+            f"Expected output codec {case['expected_codec']!r}, got {video_stream['codec_name']!r}"
+        )
 
         actual_duration = float(info["format"]["duration"])
         expected = case["expected_duration"]
@@ -126,3 +235,21 @@ class TestPipeline:
         assert abs(actual_duration - expected) < tolerance, (
             f"Output duration {actual_duration}s outside {expected}s +/- {tolerance}s"
         )
+
+
+def _make_pipeline_test_class(case):
+    return type(
+        f"TestPipeline_{case['id']}",
+        (_PipelineTestBase,),
+        {
+            "case": case,
+            "__doc__": f"Pipeline case: {case['id']}",
+        },
+    )
+
+
+# Generate one test class per PIPELINE_CASES entry and register it at module
+# scope so pytest's collector picks it up like any other TestXxx class.
+for _case in PIPELINE_CASES:
+    globals()[f"TestPipeline_{_case['id']}"] = _make_pipeline_test_class(_case)
+del _case
