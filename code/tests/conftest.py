@@ -1,12 +1,11 @@
-import pytest
-import subprocess
 import json
-import sys
 import os
+import subprocess
+import sys
+
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-
-
 
 # ---------------------------------------------------------------------------
 # Shared geometry: every synthetic source uses the same letterbox so crop
@@ -19,6 +18,24 @@ FRAME_WIDTH = 1920
 FRAME_HEIGHT = 1080
 BAR_HEIGHT = 140
 CONTENT_HEIGHT = FRAME_HEIGHT - (2 * BAR_HEIGHT)
+
+# ---------------------------------------------------------------------------
+# Colour / static HDR metadata baked into the sources. integration_test.py
+# checks that the pipeline carries these values through to the output.
+#   master-display units: chromaticity 0.00002, luminance 0.0001 cd/m2
+#   -> G(0.265,0.690) B(0.150,0.060) R(0.680,0.320) WP(0.3127,0.3290) L(1000, 0.0001)
+#   max-cll = MaxCLL 1000, MaxFALL 400
+# ---------------------------------------------------------------------------
+HDR10_X265 = (
+    "hdr10=1:repeat-headers=1:"
+    "colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc:range=limited:"
+    "master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1):"
+    "max-cll=1000,400"
+)
+SDR_X265 = "repeat-headers=1:colorprim=bt709:transfer=bt709:colormatrix=bt709:range=limited"
+SDR_FULL_X265 = "repeat-headers=1:colorprim=bt709:transfer=bt709:colormatrix=bt709:range=full"
+SDR_X264_FLAGS = ["-color_primaries", "bt709", "-color_trc", "bt709",
+                  "-colorspace", "bt709", "-color_range", "tv"]
 
 
 def _encode_letterboxed_raw(tmp_path, codec, extra_params=None, x265_params=None):
@@ -54,23 +71,35 @@ def _remux_to_mkv(tmp_path, source_path, output_name="synthetic_input.mkv"):
     return output_mkv
 
 
+# ---------------------------------------------------------------------------
+# HDR sources
+# ---------------------------------------------------------------------------
 @pytest.fixture(scope="session")
 def synthetic_dovi_clip(tmp_path_factory):
-    """10s H.265, letterboxed, with a synthetic Profile 8.1 DoVi RPU injected."""
+    """10s H.265, letterboxed, static HDR10 + synthetic Profile 8.1 DoVi RPU.
+    The RPU carries L5 active-area offsets matching the letterbox so the
+    crop -> RPU active-area edit can be verified.
+    """
     tmp_path = tmp_path_factory.mktemp("synthetic_dovi")
 
-    raw_hevc = _encode_letterboxed_raw(tmp_path, "libx265", x265_params="hdr10=1:repeat-headers=1")
+    raw_hevc = _encode_letterboxed_raw(tmp_path, "libx265", x265_params=HDR10_X265)
 
     rpu_config = {
         "cm_version": "V40",
         "profile": "8.1",
         "length": NUM_FRAMES,
+        "level5": {
+            "active_area_left_offset": 0,
+            "active_area_right_offset": 0,
+            "active_area_top_offset": BAR_HEIGHT,
+            "active_area_bottom_offset": BAR_HEIGHT,
+        },
         "level6": {
             "max_display_mastering_luminance": 1000,
             "min_display_mastering_luminance": 1,
             "max_content_light_level": 1000,
-            "max_frame_average_light_level": 400
-        }
+            "max_frame_average_light_level": 400,
+        },
     }
     config_path = tmp_path / "rpu_config.json"
     with open(config_path, "w") as f:
@@ -100,7 +129,7 @@ def synthetic_hdr10plus_clip(tmp_path_factory):
     """
     tmp_path = tmp_path_factory.mktemp("synthetic_hdr10plus")
 
-    raw_hevc = _encode_letterboxed_raw(tmp_path, "libx265", x265_params="hdr10=1:repeat-headers=1")
+    raw_hevc = _encode_letterboxed_raw(tmp_path, "libx265", x265_params=HDR10_X265)
 
     def make_frame_entry(sequence_index, scene_frame_index):
         return {
@@ -120,22 +149,15 @@ def synthetic_hdr10plus_clip(tmp_path_factory):
         }
 
     hdr10plus_config = {
-        "JSONInfo": {
-        "HDR10plusProfile": "B",
-        "Version": "1.0"
-        },
-        "ToolInfo": {
-        "Tool": "hdr10plus_parser",
-        "Version": "1.7.2"
-        },
-        "SceneInfo": [
-            make_frame_entry(i, i) for i in range(NUM_FRAMES)
-        ],
+        "JSONInfo": {"HDR10plusProfile": "B", "Version": "1.0"},
+        "ToolInfo": {"Tool": "hdr10plus_parser", "Version": "1.7.2"},
+        "SceneInfo": [make_frame_entry(i, i) for i in range(NUM_FRAMES)],
         "SceneInfoSummary": {
             "SceneFirstFrameIndex": [0],
             "SceneFrameNumbers": [NUM_FRAMES]
-        }
+        },
     }
+
     metadata_path = tmp_path / "hdr10plus_metadata.json"
     with open(metadata_path, "w") as f:
         json.dump(hdr10plus_config, f)
@@ -156,25 +178,43 @@ def synthetic_hdr10plus_clip(tmp_path_factory):
 
 
 @pytest.fixture(scope="session")
-def synthetic_sdr_h265_clip(tmp_path_factory):
-    """10s H.265, letterboxed, plain SDR -- no HDR10, no DoVi, no HDR10+.
-    Exercises the `elif VPC.HDR_type == "None"` branch of the pipeline.
+def synthetic_hdr10_clip(tmp_path_factory):
+    """10s H.265, letterboxed, STATIC HDR10 only (PQ/BT.2020 + mastering
+    display + CLL/FALL). No DoVi, no HDR10+.
+    The pipeline must detect HDR_type == "None" yet still carry the static
+    metadata through to the output.
     """
-    tmp_path = tmp_path_factory.mktemp("synthetic_sdr_h265")
+    tmp_path = tmp_path_factory.mktemp("synthetic_hdr10")
+    raw_hevc = _encode_letterboxed_raw(tmp_path, "libx265", x265_params=HDR10_X265)
+    return str(_remux_to_mkv(tmp_path, raw_hevc, "synthetic_hdr10_input.mkv"))
 
-    raw_hevc = _encode_letterboxed_raw(tmp_path, "libx265", x265_params="repeat-headers=1")
-    output_mkv = _remux_to_mkv(tmp_path, raw_hevc, "synthetic_sdr_h265_input.mkv")
-    return str(output_mkv)
+
+# ---------------------------------------------------------------------------
+# SDR sources
+# ---------------------------------------------------------------------------
+@pytest.fixture(scope="session")
+def synthetic_sdr_h265_clip(tmp_path_factory):
+    """10s H.265, letterboxed, plain SDR tagged BT.709 limited range."""
+    tmp_path = tmp_path_factory.mktemp("synthetic_sdr_h265")
+    raw_hevc = _encode_letterboxed_raw(tmp_path, "libx265", x265_params=SDR_X265)
+    return str(_remux_to_mkv(tmp_path, raw_hevc, "synthetic_sdr_h265_input.mkv"))
+
+
+@pytest.fixture(scope="session")
+def synthetic_sdr_fullrange_clip(tmp_path_factory):
+    """10s H.265, letterboxed, SDR tagged BT.709 FULL range. Used to check
+    that the colour-range tag is not silently rewritten to limited."""
+    tmp_path = tmp_path_factory.mktemp("synthetic_sdr_fullrange")
+    raw_hevc = _encode_letterboxed_raw(tmp_path, "libx265", x265_params=SDR_FULL_X265)
+    return str(_remux_to_mkv(tmp_path, raw_hevc, "synthetic_sdr_fullrange_input.mkv"))
 
 
 @pytest.fixture(scope="session")
 def synthetic_h264_clip(tmp_path_factory):
-    """10s H.264, letterboxed, no HDR metadata at all. Exercises the
-    `VPC.is_H265 == False` gate that forces `profile["HDR_enable"] = False`
+    """10s H.264, letterboxed, SDR BT.709, no HDR metadata at all. Exercises
+    the `VPC.is_H265 == False` gate that forces `profile["HDR_enable"] = False`
     in VideoProcessingConfig.analyzeOriginal().
     """
     tmp_path = tmp_path_factory.mktemp("synthetic_h264")
-
-    raw_h264 = _encode_letterboxed_raw(tmp_path, "libx264")
-    output_mkv = _remux_to_mkv(tmp_path, raw_h264, "synthetic_h264_input.mkv")
-    return str(output_mkv)
+    raw_h264 = _encode_letterboxed_raw(tmp_path, "libx264", extra_params=SDR_X264_FLAGS)
+    return str(_remux_to_mkv(tmp_path, raw_h264, "synthetic_h264_input.mkv"))

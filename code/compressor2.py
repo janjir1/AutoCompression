@@ -191,6 +191,99 @@ def execute(command: list, timeout: int = 3600) -> bool:
     logger.debug(f"[execute] Command execution finished successfully")
     return True
 
+import time  # add to the imports at the top
+
+def execute_pipeline(commands: list, timeout: int = 3600) -> bool:
+    """
+    Run commands connected by pipes (cmd1 | cmd2 | ...) without a shell.
+    Every command is a list. Each process's stderr is logged; the last
+    process's stdout is logged. Returns True only if ALL processes exit 0.
+    """
+    for cmd in commands:
+        logger.debug(f"[execute_pipeline] Command: {cmd}")
+
+    stream_logger = logging.getLogger("FileLogger")
+    for _ in range(6):
+        stream_logger.debug("-" * 94)
+    stream_logger.debug(f"[execute_pipeline] Commands: {commands}")
+
+    procs = []
+    threads = []
+    pgid = None
+    prev_stdout = None
+
+    def log_stream(stream, stream_type, label):
+        last_line = None
+        buf = bytearray()
+        for byte in iter(lambda: stream.read(1), b''):
+            buf += byte
+            if byte not in (b'\n', b'\r'):
+                continue
+            line = buf.decode('utf-8', errors='replace').rstrip('\r\n')
+            buf = bytearray()
+            stripped = line.strip()
+            if not stripped or stripped == last_line:
+                continue
+            stream_logger.debug(f"[{stream_type}:{label}] {line}")
+            last_line = stripped
+
+    try:
+        for i, cmd in enumerate(commands):
+            is_last = (i == len(commands) - 1)
+            p = subprocess.Popen(
+                cmd,
+                stdin=prev_stdout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                process_group=(0 if i == 0 else pgid),   # 0 = new group led by this process
+            )
+            if i == 0:
+                pgid = p.pid
+            if prev_stdout is not None:
+                prev_stdout.close()  # parent must not keep the pipe open (SIGPIPE/EOF)
+            prev_stdout = p.stdout
+            procs.append(p)
+
+            threads.append(Thread(target=log_stream, args=(p.stderr, "STDERR", cmd[0])))
+            if is_last:
+                threads.append(Thread(target=log_stream, args=(p.stdout, "STDOUT", cmd[0])))
+
+        for t in threads:
+            t.start()
+
+        deadline = time.monotonic() + timeout
+        for p in procs:
+            p.wait(timeout=max(0.0, deadline - time.monotonic()))
+
+    except subprocess.TimeoutExpired:
+        logger.error(f"[execute_pipeline] Exceeded {timeout}s timeout, killing process group")
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        for p in procs:
+            p.wait()
+        for t in threads:
+            t.join(timeout=5)
+        return False
+    except Exception:
+        if pgid is not None:
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        raise
+
+    for t in threads:
+        t.join()
+
+    codes = [p.returncode for p in procs]
+    logger.debug(f"[execute_pipeline] Exit codes: {list(zip([c[0] for c in commands], codes))}")
+    if any(c != 0 for c in codes):
+        logger.error(f"[execute_pipeline] Pipeline failed, exit codes: {codes}")
+        return False
+    return True
+
 def check_output(file_path: str, size_limit=2048) -> bool:
     """
     Validate that an output file exists and meets minimum size requirements.
@@ -383,7 +476,7 @@ def get_video_metadata_type(VPC: VideoProcessingConfig):
         if not execute(dovi):
             logger.warning("[video_ffmpeg.get_video_metadata_type] DoVi tool execution failed")
 
-        if check_output(VPC.dovi_metadata_file):
+        if check_output(VPC.dovi_metadata_file, size_limit=100):
             logger.debug("[video_ffmpeg.get_video_metadata_type] DoVi metadata file is valid")
             VPC.HDR_type = "DoVi"
             return True
@@ -429,7 +522,7 @@ def crop_dovi_rpu(VPC: VideoProcessingConfig) -> bool:
     if not execute(command):
         logger.error("[crop_dovi_rpu] DoVi RPU crop edit failed")
         return False
-    return check_output(VPC.dovi_metadata_file)
+    return check_output(VPC.dovi_metadata_file, size_limit=100)
 
 def video_HDR_extract(VPC: VideoProcessingConfig):
     """
@@ -465,7 +558,7 @@ def video_HDR_extract(VPC: VideoProcessingConfig):
         if not execute(dovi, timeout=3600*4):
             logger.error("[video_ffmpeg.video_HDR_extract] DoVi extraction failed")
             return False
-        if not check_output(VPC.dovi_metadata_file):
+        if not check_output(VPC.dovi_metadata_file, size_limit=100):
             logger.error("[video_ffmpeg.video_HDR_extract] DoVi metadata file validation failed")
             return False
         if not crop_dovi_rpu(VPC):
@@ -521,6 +614,7 @@ def elementary_to_mkv(VPC: VideoProcessingConfig):
         '--fix-bitstream-timing-information', '0', 
         '--cues', '0:iframes',
         '--clusters-in-meta-seek',
+        *mkvmerge_colour_args(VPC),   # Matroska colour + static HDR metadata (deband pipe drops it)
         VPC.source_path         
     ]
     
@@ -535,6 +629,64 @@ def elementary_to_mkv(VPC: VideoProcessingConfig):
     
     logger.debug("[compressor.elementary_to_mkv] IVF to MKV conversion completed successfully")
     return True
+# ffprobe names -> Matroska / ITU-T H.273 numbers (mkvmerge colour options)
+MKV_PRIMARIES = {"bt709": 1, "bt470m": 4, "bt470bg": 5, "smpte170m": 6, "smpte240m": 7, "film": 8,
+                 "bt2020": 9, "smpte428": 10, "smpte431": 11, "smpte432": 12, "jedec-p22": 22}
+MKV_TRANSFER = {"bt709": 1, "gamma22": 4, "gamma28": 5, "smpte170m": 6, "smpte240m": 7, "linear": 8,
+                "log": 9, "log_sqrt": 10, "iec61966-2-4": 11, "bt1361e": 12, "iec61966-2-1": 13,
+                "bt2020-10": 14, "bt2020-12": 15, "smpte2084": 16, "smpte428": 17, "arib-std-b67": 18}
+MKV_MATRIX = {"gbr": 0, "rgb": 0, "bt709": 1, "fcc": 4, "bt470bg": 5, "smpte170m": 6, "smpte240m": 7,
+              "ycgco": 8, "bt2020nc": 9, "bt2020c": 10, "smpte2085": 11,
+              "chroma-derived-nc": 12, "chroma-derived-c": 13, "ictcp": 14}
+
+def mkvmerge_colour_args(VPC: VideoProcessingConfig) -> list:
+    """
+    Matroska colour + static HDR metadata for the video track (TID 0), taken from the original file.
+    Only used when deband is on: the y4m pipe from vspipe drops the colour tags and HDR side data.
+    Container level, so it works for any codec (AV1, HEVC, H.264). Returns [] if there is nothing to set.
+    """
+    if not deband_enabled(VPC):
+        return []
+    args = []
+    for option, key, table in (("--colour-primaries", "color_primaries", MKV_PRIMARIES),
+                               ("--colour-transfer-characteristics", "color_transfer", MKV_TRANSFER),
+                               ("--colour-matrix", "color_space", MKV_MATRIX)):
+        number = table.get(str(VPC.VUI.get(key, "")).strip().lower())
+        if number is not None:
+            args += [option, f"0:{number}"]
+
+    side = VPC.SideDTA
+    if side["Mastering_display_exists"]:
+        args += ["--chromaticity-coordinates",
+                 f"0:{side['red_x']:.5f},{side['red_y']:.5f},{side['green_x']:.5f},{side['green_y']:.5f},"
+                 f"{side['blue_x']:.5f},{side['blue_y']:.5f}",
+                 "--white-colour-coordinates", f"0:{side['white_point_x']:.5f},{side['white_point_y']:.5f}",
+                 "--max-luminance", f"0:{side['max_luminance']:.4f}",
+                 "--min-luminance", f"0:{side['min_luminance']:.6f}"]
+    if side["Cll_exists"]:
+        args += ["--max-content-light", f"0:{int(side['max_content'])}",
+                 "--max-frame-light", f"0:{int(side['max_average'])}"]
+    return args
+
+def mkv_add_colour(VPC: VideoProcessingConfig) -> bool:
+    """Rewrite the mkv written by ffmpeg with Matroska colour metadata (remux, no re-encode)."""
+    args = mkvmerge_colour_args(VPC)
+    if not args:
+        return True
+
+    tmp_path = str(VPC.target_path) + ".colour.mkv"
+    command = ["mkvmerge", "-o", tmp_path, *args, str(VPC.target_path)]
+    logger.debug(f"[mkv_add_colour] Command: {' '.join(command)}")
+    timeout = 6*3600 if VPC.is_final_export else 3600
+    if not execute(command, timeout=timeout):
+        logger.error("[mkv_add_colour] mkvmerge colour remux failed")
+        return False
+    if not check_output(tmp_path):
+        logger.error("[mkv_add_colour] Remuxed file validation failed")
+        return False
+    os.replace(tmp_path, VPC.target_path)
+    return True
+
 
 def vfCropComandGenerator(VPC: VideoProcessingConfig) -> str:
     target_v_res = VPC.orig_v_res - VPC.crop[0] - VPC.crop[1]
@@ -547,6 +699,59 @@ def vfCropComandGenerator(VPC: VideoProcessingConfig) -> str:
     command = f"crop={VPC.orig_h_res}:{target_v_res}:0:{VPC.crop[0]},scale={VPC.output_res}:-2:flags=lanczos+accurate_rnd"
     logger.debug(f"[vfCropComandGenerator] Generated filter: {command}")
     return command
+
+def deband_enabled(VPC: VideoProcessingConfig) -> bool:
+    """Optional deband stage, switched on by the profile section "Deband_enable"."""
+    return bool(VPC.profile.get("Deband_enable", [None, False])[1])
+
+def deband_source_stage(VPC: VideoProcessingConfig) -> tuple:
+    """
+    Returns (leading_commands, ffmpeg_input_args).
+
+    Deband off: no extra command, ffmpeg reads the source file directly.
+    Deband on:  vspipe runs the external .vpy script and pipes y4m into ffmpeg.
+    All deband options come from the profile section "Deband" ([key, value, ...])
+    and are handed to the script as one JSON dict (vspipe -a options=...).
+    The key "script" is the .vpy path (relative = next to this file).
+    """
+    if not deband_enabled(VPC):
+        return [], ["-i", str(VPC.source_path)]
+
+    section = VPC.profile["Deband"]
+    options = {}
+    for key, value in zip(section[0::2], section[1::2]):
+        try:
+            value = json.loads(value)   # "0.5" -> 0.5, "[1, 2]" -> list; bool/plain text stay as they are
+        except (TypeError, ValueError):
+            pass
+        options[str(key).lstrip("-")] = value
+
+    script = str(options.pop("script", "deband.vpy"))
+    if not os.path.isabs(script):
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), script)
+    cache = os.path.join(VPC.workspace, os.path.basename(str(VPC.source_path)) + ".lwi")
+
+    vspipe_cmd = [
+        "vspipe", "-c", "y4m",
+        "-a", f"source={VPC.source_path}",
+        "-a", f"cache={cache}",
+        "-a", f"options={json.dumps(options)}",
+        script, "-",
+    ]
+    logger.debug(f"[deband_source_stage] Deband enabled, options: {options}")
+    return [vspipe_cmd], ["-f", "yuv4mpegpipe", "-i", "-"]
+
+def deband_colour_args(VPC: VideoProcessingConfig) -> list:
+    """ffmpeg colour tags. The y4m pipe from vspipe carries none, so set them from the original file."""
+    if not deband_enabled(VPC):
+        return []
+    args = []
+    for option, key in (("-color_primaries", "color_primaries"), ("-color_trc", "color_transfer"),
+                        ("-colorspace", "color_space"), ("-chroma_sample_location", "chroma_location")):
+        value = VPC.VUI.get(key)
+        if value and value != "unknown":
+            args += [option, value]
+    return args
 
 def video_ffmpeg_h265(VPC: VideoProcessingConfig) -> bool:
     """
@@ -647,9 +852,11 @@ def video_ffmpeg_h265(VPC: VideoProcessingConfig) -> bool:
         logger.debug(f"[video_ffmpeg.video_encode_ffmpeg] Source: {VPC.source_path} -> Target: {VPC.target_path}")
         logger.debug(f"[video_ffmpeg.video_encode_ffmpeg] Encoding parameters - Target resolution: {VPC.output_res}, CQ: {VPC.output_cq}, Crop: {VPC.crop}")
 
+        lead_commands, input_args = deband_source_stage(VPC)
+
         command = [
             "ffmpeg",  # Command to run FFmpeg
-            "-i", VPC.source_path,  # Input file
+            *input_args,  # Input file (or vspipe pipe when deband is on)
             "-an",  # No audio
             "-sn",  # No subtitles
         ]
@@ -669,6 +876,7 @@ def video_ffmpeg_h265(VPC: VideoProcessingConfig) -> bool:
 
         command_append = [
             "-copy_unknown",  # Copy unknown streams
+            *deband_colour_args(VPC),  # Colour tags (lost in the vspipe pipe)
             "-map_metadata", "0",  # Copy metadata from input
             '-cq', str(VPC.output_cq),  # Constant Quality mode
             '-y',  # Overwrite output file
@@ -681,9 +889,12 @@ def video_ffmpeg_h265(VPC: VideoProcessingConfig) -> bool:
         logger.debug("[video_ffmpeg.video_encode_ffmpeg] Starting FFmpeg encoding process")
 
         timeout = max_timeout if VPC.is_final_export else 3600
-        if execute(command, timeout=timeout):
+        if (execute_pipeline(lead_commands + [command], timeout=timeout)
+                if lead_commands else execute(command, timeout=timeout)):
             if check_output(VPC.target_path):
                 logger.debug("[video_ffmpeg.video_encode_ffmpeg] FFmpeg encoding completed successfully")
+                if deband_enabled(VPC) and str(VPC.target_path).endswith(".mkv"):
+                    return mkv_add_colour(VPC)
                 return True
             else:
                 logger.error("[video_ffmpeg.video_encode_ffmpeg] Output file validation failed")
@@ -945,68 +1156,55 @@ def video_ffmpeg_AV1(VPC: VideoProcessingConfig) -> bool:
             VPC.dovi_metadata_file
 
         resolution_filter = vfCropComandGenerator(VPC)
-        
-        ffmpeg_part = (
-            f"ffmpeg -i {VPC.source_path} "
-            "-pix_fmt yuv420p10le "       # 10-bit pixel format
-            "-f yuv4mpegpipe -strict -1 " # Y4M pipe (carries metadata)
-            "-an -sn "                    # No audio/subs
-            f"-vf {resolution_filter} "
-            "-"                           # Output to stdout
-        )
 
-        svt_part = (
-            "SvtAv1EncApp -i stdin "      # Read from pipe
-            "--input-depth 10 "           # Explicit 10-bit depth
-            f"--crf {str(VPC.output_cq)} "                     
-            f"--color-primaries {primaries_name_to_num(VPC.VUI["color_primaries"])} "
-            f"--transfer-characteristics {transfer_name_to_num(VPC.VUI["color_transfer"])} "
-            f"--matrix-coefficients {matrix_name_to_num(VPC.VUI["color_space"])} "
-            "--color-range 0 "
-            f"--chroma-sample-position {chroma_sample_position_name_to_num(VPC.VUI["chroma_location"])} "
-            f"-b {VPC.target_path}"    # Output IVF file
-        )
+        lead_commands, input_args = deband_source_stage(VPC)
 
-        video_profile = VPC.profile["video"].copy()
-        video_profile_str = ' '.join(video_profile)
-        svt_part = svt_part + " " + video_profile_str
-
-        if VPC.HDR_type is not ("None" or "uninit"):
-
-            if VPC.HDR_type == "HDR10":
-                svt_hdr_dynamic = (f"--hdr10plus-json {VPC.HDR10_metadata_file}") 
-
-            elif VPC.HDR_type == "DoVi":
-                svt_hdr_dynamic = (f"--dolby-vision-rpu {VPC.dovi_metadata_file}") 
-            
-            svt_part = svt_part + " " + svt_hdr_dynamic
-
-        if VPC.SideDTA["Cll_exists"] == True:
-            svt_part = svt_part + f" --content-light {VPC.SideDTA["max_content"]},{VPC.SideDTA["max_average"]}"
-
-        if VPC.SideDTA["Mastering_display_exists"] == True:
-            svt_part += (
-                f" --mastering-display "
-                f"'G({VPC.SideDTA['green_x']},{VPC.SideDTA['green_y']})"
-                f"B({VPC.SideDTA['blue_x']},{VPC.SideDTA['blue_y']})"
-                f"R({VPC.SideDTA['red_x']},{VPC.SideDTA['red_y']})"
-                f"WP({VPC.SideDTA['white_point_x']},{VPC.SideDTA['white_point_y']})"
-                f"L({VPC.SideDTA['max_luminance']},{VPC.SideDTA['min_luminance']})'"
-            )
-
-        # The final list calls /bin/sh to execute the pipe
-        command = [
-            "/bin/sh",
-            "-c",
-            f"{ffmpeg_part} | {svt_part}"
+        ffmpeg_cmd = [
+            "ffmpeg", "-nostdin",
+            *input_args,
+            "-pix_fmt", "yuv420p10le",
+            "-f", "yuv4mpegpipe", "-strict", "-1",
+            "-an", "-sn",
+            "-vf", resolution_filter,
+            "-",
         ]
 
-        logger.debug(f"[video_ffmpeg_AV1.SvtAv1EncApp_encode] Complete FFmpeg command: {' '.join(command)}")
-        logger.debug("[video_ffmpeg_AV1.SvtAv1EncApp_encode] Starting FFmpeg encoding process")
+        svt_cmd = [
+            "SvtAv1EncApp", "-i", "stdin",
+            "--input-depth", "10",
+            "--crf", str(VPC.output_cq),
+            "--color-primaries", str(primaries_name_to_num(VPC.VUI["color_primaries"])),
+            "--transfer-characteristics", str(transfer_name_to_num(VPC.VUI["color_transfer"])),
+            "--matrix-coefficients", str(matrix_name_to_num(VPC.VUI["color_space"])),
+            "--color-range", "0",
+            "--chroma-sample-position", str(chroma_sample_position_name_to_num(VPC.VUI["chroma_location"])),
+            "-b", str(VPC.target_path),
+        ]
+
+        for item in VPC.profile["video"]:      # e.g. "--preset 7" -> ["--preset", "7"]
+            svt_cmd += str(item).split()
+
+        if VPC.HDR_type == "HDR10":
+            svt_cmd += ["--hdr10plus-json", str(VPC.HDR10_metadata_file)]
+        elif VPC.HDR_type == "DoVi":
+            svt_cmd += ["--dolby-vision-rpu", str(VPC.dovi_metadata_file)]
+
+        if VPC.SideDTA["Cll_exists"] == True:
+            svt_cmd += ["--content-light",
+                        f"{VPC.SideDTA['max_content']},{VPC.SideDTA['max_average']}"]
+
+        if VPC.SideDTA["Mastering_display_exists"] == True:
+            svt_cmd += ["--mastering-display",           # no extra quotes now
+                (f"G({VPC.SideDTA['green_x']},{VPC.SideDTA['green_y']})"
+                 f"B({VPC.SideDTA['blue_x']},{VPC.SideDTA['blue_y']})"
+                 f"R({VPC.SideDTA['red_x']},{VPC.SideDTA['red_y']})"
+                 f"WP({VPC.SideDTA['white_point_x']},{VPC.SideDTA['white_point_y']})"
+                 f"L({VPC.SideDTA['max_luminance']},{VPC.SideDTA['min_luminance']})")]
 
         timeout = max_timeout if VPC.is_final_export else 3600
-        if execute(command, timeout=timeout):
+        if execute_pipeline(lead_commands + [ffmpeg_cmd, svt_cmd], timeout=timeout):
             if check_output(VPC.target_path):
+
                 logger.debug("[video_ffmpeg_AV1.SvtAv1EncApp_encode] FFmpeg encoding completed successfully")
                 return True
             else:

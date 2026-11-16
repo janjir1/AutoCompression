@@ -10,7 +10,7 @@ Resolution_calculation:
   cq_value: 20
   VQA_per_test: 3
   keep_best_slopes: 1.0
-  Threads: 5
+  Threads: 2
 
 CQ_calculation:
   Enabled: true
@@ -19,7 +19,7 @@ CQ_calculation:
   cq_reference: 5
   scene_length: 2
   keep_best_scenes: 1.0
-  threads: 5
+  threads: 2
 
 Channels_calculation:
   Enabled: false
@@ -31,7 +31,7 @@ HDR_test_frame_limit:
   frame_limit: 240
 
 Export_output:
-  Enabled: false
+  Enabled: true
 
 Enable_delete:
-  Enabled: true
+  Enabled: false

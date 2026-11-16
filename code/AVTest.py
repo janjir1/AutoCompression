@@ -305,22 +305,31 @@ def getVMAF(reference_file: str, distorted_file: str, VPC, threads: int = 8) -> 
 
      # Define the ffmpeg command to compute VMAF with multithreading
     output_file = r"VMAFlog.json"
+
+    cuda_init = ['-init_hw_device', 'cuda=cu:0', '-filter_hw_device', 'cu']
+    vmaf_graph = (
+        "[0:v]format=yuv420p,hwupload_cuda[a];"
+        "[1:v]format=yuv420p,hwupload_cuda[b];"
+        f"[a][b]libvmaf_cuda=log_path={output_file}"
+    )
+
+    #TODO: check if cuda is avalible before running vmaf-cuda
+
     if "AV1" in VPC.profile["function"][1].upper():
         command = [
-            'ffmpeg',
-            '-hwaccel', 'none', '-c:v',  'libdav1d', '-i', reference_file,        # Input reference file
-            '-hwaccel', 'none', '-c:v',  'libdav1d', '-i', distorted_file,        # Input distorted file
-            '-lavfi', f'libvmaf=n_threads={threads}:log_path={output_file}',  # VMAF with multithreading and log output
-            '-f', 'null', '-'            # No output file, just compute VMAF
+            'ffmpeg', *cuda_init,
+            '-hwaccel', 'none', '-c:v', 'libdav1d', '-i', distorted_file,   # input 0
+            '-hwaccel', 'none', '-c:v', 'libdav1d', '-i', reference_file,   # input 1
+            '-lavfi', vmaf_graph,
+            '-f', 'null', '-'
         ]
-
     else:
         command = [
-            'ffmpeg',
-            '-i', reference_file,        # Input reference file
-            '-i', distorted_file,        # Input distorted file
-            '-lavfi', f'libvmaf=n_threads={threads}:log_path={output_file}',  # VMAF with multithreading and log output
-            '-f', 'null', '-'            # No output file, just compute VMAF
+            'ffmpeg', *cuda_init,
+            '-i', distorted_file,       # input 0
+            '-i', reference_file,       # input 1
+            '-lavfi', vmaf_graph,
+            '-f', 'null', '-'
         ]
 
     logger.debug(f"ffmpeg vmaf command: {command}")
