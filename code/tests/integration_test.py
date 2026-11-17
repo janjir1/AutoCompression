@@ -426,8 +426,12 @@ class _PipelineTestBase:
         vs = video_stream(info)
         w, h = vs["width"], vs["height"]
         assert w == self.vpc.output_res, f"width {w} != output_res {self.vpc.output_res}"
+        tol = self.case.get("crop_tolerance", 2)
         expected_h = 2 * round((w * (1080 - 280) / 1920) / 2)
-        assert h % 2 == 0 and abs(h - expected_h) <= 2, f"height {h}, expected ~{expected_h} (bars removed)"
+        # Account for crop tolerance on both top and bottom bars plus even-pixel rounding
+        h_tol = 2 * tol + 2
+        assert h % 2 == 0 and abs(h - expected_h) <= h_tol, \
+            f"height {h}, expected ~{expected_h} ± {h_tol} (bars removed)"
         assert count_frames(out_path) == count_frames(self.source_fixture), "Frame count changed"
         assert vs.get("r_frame_rate") == "24/1", f"Frame rate changed: {vs.get('r_frame_rate')}"
 

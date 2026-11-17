@@ -12,14 +12,26 @@ import weakref
 
 logger = logging.getLogger("AppLogger")
 
+DEFAULT_VUI = {
+    "color_primaries": "unknown",
+    "color_space": "unknown",
+    "color_transfer": "unknown",
+    "chroma_location": "unknown",
+    "color_range": "tv",
+}
+
+DEFAULT_SIDEDTA = {
+    "Cll_exists": False,
+    "Mastering_display_exists": False,
+}
+
+
 class VideoProcessingConfig:
     """
     Configuration class for video processing operations.
 
-    
     Manages video processing parameters including input/output paths, encoding settings,
     HDR metadata handling, and temporal/spatial cropping configurations.
-
     """
     crop: List[int] = [0, 0]
     channels: Union[int, bool] = False
@@ -36,17 +48,23 @@ class VideoProcessingConfig:
             output_file_name (str): Name for the output file (without extension)
             workspace (str): Working directory for temporary and output files
         """
-        logger.info(f"[VideoProcessingConfig.__init__] Initializing video processing config")
+        logger.info("[VideoProcessingConfig.__init__] Initializing video processing config")
         logger.debug(f"[VideoProcessingConfig.__init__] Input file: {input_file_path}")
         logger.debug(f"[VideoProcessingConfig.__init__] Output name: {output_file_name}")
         logger.debug(f"[VideoProcessingConfig.__init__] Workspace: {workspace}")
-        
+
         self.orig_file_path = input_file_path
         self.output_file_name = output_file_name
         self.workspace = workspace
-        self.output_file_path = os.path.join(self.workspace, self.output_file_name) + ".mkv"   
+        self.output_file_path = os.path.join(self.workspace, self.output_file_name) + ".mkv"
         self.parent = None
         self.is_final_export = False
+
+        # Initialize VUI and SideDTA with safe defaults before analysis runs
+        self.VUI = DEFAULT_VUI.copy()
+        self.SideDTA = DEFAULT_SIDEDTA.copy()
+        self.orig_framerate = False
+        self.orig_framerate_fraction = None
 
         if not os.path.exists(workspace):
             os.makedirs(workspace)
@@ -61,12 +79,11 @@ class VideoProcessingConfig:
         """
         Load encoding profiles and test settings from YAML files.
         Args:
-
             profile_path (str): Path to the encoding profile YAML file
             test_settings_path (str): Path to the test settings YAML file
             tools_path (str): Path to external tools directory
         """
-        logger.info(f"[VideoProcessingConfig.readProfiles] Loading profiles and settings")
+        logger.info("[VideoProcessingConfig.readProfiles] Loading profiles and settings")
         logger.debug(f"[VideoProcessingConfig.readProfiles] Profile path: {profile_path}")
         logger.debug(f"[VideoProcessingConfig.readProfiles] Test settings path: {test_settings_path}")
         logger.debug(f"[VideoProcessingConfig.readProfiles] Tools path: {tools_path}")
@@ -76,7 +93,7 @@ class VideoProcessingConfig:
         self.tools_path = tools_path
         self.target_cq = self.getProfileValue(self.profile["test_settings"], "defalut_cq")
         self.output_cq = self.getProfileValue(self.profile["test_settings"], "defalut_cq")
-    
+
     def analyzeOriginal(self):
         """
         Analyze the original video file to extract metadata such as resolution, framerate, and duration.
@@ -85,13 +102,13 @@ class VideoProcessingConfig:
         print(self.tools_path)
         self.orig_h_res = getH_res(self.orig_file_path, self.tools_path)
         self.orig_v_res = getV_res(self.orig_file_path, self.tools_path)
-        self.orig_framerate = get_framerate(self.orig_file_path, self.tools_path)
+        self.orig_framerate, self.orig_framerate_fraction = get_framerate(self.orig_file_path, self.tools_path)
         self.orig_duration = getDuration(self.orig_file_path, self.tools_path)
         self.FS_support = get_fast_seek_support(self.orig_file_path)
         self.is_H265 = is_h265(self.orig_file_path)
         if not self.is_H265:
             self.profile["HDR_enable"][1] = False
-            logger.info(f"[VideoProcessingConfig.analyzeOriginal] File is not h265 disabling HDR")
+            logger.info("[VideoProcessingConfig.analyzeOriginal] File is not h265 disabling HDR")
 
         self.target_res = self.orig_h_res
         self.output_res = self.orig_h_res
@@ -99,24 +116,25 @@ class VideoProcessingConfig:
         metadata = get_static_metadata(self.orig_file_path)
         if metadata is None:
             logger.warning(f"[analyzeOriginal] Failed to extract static metadata for {self.orig_file_path}; using defaults")
-            self.VUI = {"color_primaries": "unknown", "color_space": "unknown", "color_transfer": "unknown", "chroma_location": "unknown"}
-            self.SideDTA = {"Cll_exists": False, "Mastering_display_exists": False}
+            self.VUI = DEFAULT_VUI.copy()
+            self.SideDTA = DEFAULT_SIDEDTA.copy()
         else:
-            self.VUI, self.SideDTA = metadata
-
+            vui_data, side_data = metadata
+            self.VUI = {**DEFAULT_VUI, **(vui_data or {})}
+            self.SideDTA = {**DEFAULT_SIDEDTA, **(side_data or {})}
 
     def create_copy(self):
         """Create a deepcopy that remembers its parent."""
         new_copy = copy.deepcopy(self)
         new_copy.parent = self  # Child remembers parent
         return new_copy
-    
+
     def DisableParentHDR(self):
         parent = self.parent
         while True:
             if parent is None:
                 logger.debug("Original parent")
-                break 
+                break
             parent.profile["HDR_enable"][1] = False
             parent = parent.parent
 
@@ -133,11 +151,12 @@ class VideoProcessingConfig:
         self.output_res = res
 
     def setCrop(self, crop: list):
+        self.crop = crop
         self.target_crop = crop
-    
+
     def setStart(self, start: int):
         self.start = start
-    
+
     def setDuration(self, duration: int):
         self.duration = duration
 
@@ -151,12 +170,12 @@ class VideoProcessingConfig:
         self.output_file_path = os.path.join(self.workspace, name + ".mkv")
 
     def setHDR_Type(self, hdr_type: str):
-        if hdr_type == ("DoVi" or "HDR10" or "None"):
-          self.HDR_type = hdr_type
-        else: logger.error(f"[VideoProcessingConfig.setHDR_Type] Unknown HDR type: {hdr_type}")
+        if hdr_type in ("DoVi", "HDR10", "None"):
+            self.HDR_type = hdr_type
+        else:
+            logger.error(f"[VideoProcessingConfig.setHDR_Type] Unknown HDR type: {hdr_type}")
 
     def getProfileValue(self, lst: list, word: str):
-        
         """
         Get a value from a profile list based on a key word.
         Args:
@@ -165,8 +184,8 @@ class VideoProcessingConfig:
         Returns:
             The value following the specified key
         """
-        return lst[lst.index(word)+1]
-    
+        return lst[lst.index(word) + 1]
+
     def export_to_txt(self):
         """
         Export all attributes of this VideoProcessingConfig instance to a text file.
@@ -174,7 +193,6 @@ class VideoProcessingConfig:
         Each line is either “attribute: value” for simple attrs, or
         dict entries for profile and settings if present.
         """
-
         lines = []
         # Dump all simple attributes
         for attr, val in vars(self).items():
@@ -187,7 +205,7 @@ class VideoProcessingConfig:
                 lines.append(f"profile[{k}]: {v}")
 
         # Dump settings dict if exists
-        if hasattr(self, "settings") and isinstance(self.test_settings, dict):
+        if hasattr(self, "test_settings") and isinstance(self.test_settings, dict):
             lines.append("\n# test_settings")
             for k, v in self.test_settings.items():
                 lines.append(f"settings[{k}]: {v}")
@@ -206,7 +224,7 @@ def readProfile(yaml_profile):
     Returns:
         tuple: (profile dictionary, profile_settings dictionary)
     """
-    with open(yaml_profile, 'r') as file:
+    with open(yaml_profile, "r", encoding="utf-8") as file:
         loaded_data = yaml.safe_load(file)
 
     profile = dict()
@@ -221,43 +239,23 @@ def readProfile(yaml_profile):
                 profile[key].append(str(subvalue[1]))
 
     profile_settings = loaded_data["test_settings"]
-    
+
     logger.debug(f"[readProfile] Successfully loaded profile with {len(profile)} sections")
     return profile, profile_settings
+
 
 def readSettings(yaml_settings):
     """
     Read and parse a YAML settings file for test configurations.
     Args:
         yaml_settings (str): Path to the YAML settings file
-   Returns:
+    Returns:
         dict: Parsed settings dictionary with enable flags and parameters
     """
-    """   
-    with open(yaml_settings, 'r') as file:    
-    
-    loaded_data = yaml.safe_load(file) 
-    dictionar = dict()
-    for key, value in loaded_data.items():
-        dictionar[key] = list()
-        for subvalue in value.items():
-            dictionar[key].append(subvalue[1])
-
-    settings = dict()
-    for key in dictionar.keys():
-
-        enable = dictionar[key][0]
-        if type(enable) is not bool:
-            enable = False
-        else: dictionar[key].pop(0)
-
-        settings[key] = [enable, dictionar[key]]
-    """
-    with open(yaml_settings, 'r') as file:
+    with open(yaml_settings, "r", encoding="utf-8") as file:
         data = yaml.safe_load(file)
     return data
 
-    return settings
 
 def getDuration(input_path: str, tools_path) -> float:
     """
@@ -269,31 +267,25 @@ def getDuration(input_path: str, tools_path) -> float:
     """
     logger.debug(f"[getDuration] Getting duration for: {input_path}")
 
-    # Run ffprobe to get video information in JSON format
     command = [
         "ffprobe",
-        '-v', 'error',                         # Suppress non-error messages
-        '-show_entries', 'format=duration',    # Extract duration
-        '-of', 'json',                         # Output format as JSON
-        input_path                             # Input file path
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "json",
+        input_path,
     ]
-    
+
     logger.debug(f"[getDuration] FFprobe command: {' '.join(command)}")
 
     try:
-        # Execute the command and capture output
         result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, shell=False)
-        
-        # Check if FFprobe execution was successful
+
         if result.returncode != 0:
             logger.error(f"FFprobe error for {input_path}: {result.stderr.strip()}")
             return 0
 
-        # Parse JSON output
         data = json.loads(result.stdout)
-        
-        # Extract and return duration
-        duration = float(data.get('format', {}).get('duration', 0))
+        duration = float(data.get("format", {}).get("duration", 0))
         if duration > 0:
             return duration
         else:
@@ -307,8 +299,8 @@ def getDuration(input_path: str, tools_path) -> float:
 
     return 0
 
-def getH_res(video_path: str, tools_path) -> int:
 
+def getH_res(video_path: str, tools_path) -> int:
     """
     Retrieves the horizontal resolution (width) of a video file using FFprobe.
 
@@ -319,39 +311,35 @@ def getH_res(video_path: str, tools_path) -> int:
     - int: Width of the video in pixels, or 0 if an error occurs.
     """
     logger.debug(f"[getH_res] Getting horizontal resolution for: {video_path}")
-    # ffprobe command to get the stream info in JSON format
     command = [
-        f"ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-        "stream=width", "-of", "json", video_path
+        "ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+        "stream=width", "-of", "json", video_path,
     ]
     logger.debug(f"[getH_res] FFprobe command: {' '.join(command)}")
-    # Run the command and capture the output
+
     try:
         result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, shell=False)
 
-        # Check if FFprobe execution was successful
         if result.returncode != 0:
             logger.error(f"[getH_res] FFprobe error for {video_path}: {result.stderr.strip()}")
             return 0
-        
-        # Parse the JSON output
-        ffprobe_output = json.loads(result.stdout)
 
-        # Extract the width from the 'width' field in the stream
-        width = int(ffprobe_output['streams'][0]['width'])
+        ffprobe_output = json.loads(result.stdout)
+        width = int(ffprobe_output["streams"][0]["width"])
         if width is not None:
             return width
         else:
-            logger.error(f"[getH_res] Failed to retrieve height from FFprobe output for {video_path}.")
+            logger.error(f"[getH_res] Failed to retrieve width from FFprobe output for {video_path}.")
             return 0
-    
+
     except json.JSONDecodeError:
         logger.error(f"[getH_res] Failed to parse JSON output from FFprobe for {video_path}.")
     except Exception as e:
         logger.error(f"[getH_res] Unexpected error while retrieving resolution for {video_path}: {e}")
 
     return 0
-    
+
+
 def getV_res(video_path: str, tools_path) -> int:
     """
     Retrieves the vertical resolution (height) of a video file using FFprobe.
@@ -362,41 +350,35 @@ def getV_res(video_path: str, tools_path) -> int:
     Returns:
     - int: Height of the video in pixels, or 0 if an error occurs.
     """
-
     logger.debug(f"[getV_res] Getting vertical resolution for: {video_path}")
 
-    # ffprobe command to get the stream info in JSON format
     command = [
-        f"ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-        "stream=height", "-of", "json", video_path
+        "ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+        "stream=height", "-of", "json", video_path,
     ]
 
-    # Run the command and capture the output
     try:
         result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, shell=False)
 
-        # Check if FFprobe execution was successful
         if result.returncode != 0:
             logger.error(f"FFprobe error for {video_path}: {result.stderr.strip()}")
             return 0
-        
-        # Parse the JSON output
-        ffprobe_output = json.loads(result.stdout)
 
-        # Extract the height from the 'height' field in the stream
-        height = int(ffprobe_output['streams'][0]['height'])
-        
+        ffprobe_output = json.loads(result.stdout)
+        height = int(ffprobe_output["streams"][0]["height"])
+
         if height is not None:
             return height
         else:
             logger.error(f"[getV_res] Failed to retrieve height from FFprobe output for {video_path}.")
             return 0
-    
+
     except json.JSONDecodeError:
         logger.error(f"[getV_res] Failed to parse JSON output from FFprobe for {video_path}.")
     except Exception as e:
         logger.error(f"[getV_res] Unexpected error while retrieving resolution for {video_path}: {e}")
     return 0
+
 
 def get_framerate(input_file, tools_path):
     """
@@ -404,63 +386,59 @@ def get_framerate(input_file, tools_path):
     Args:
         input_file (str): Path to the input video file
     Returns:
-        float: Framerate in fps, or False if detection failed
+        tuple: (float framerate in fps or False, exact fraction string e.g. '24000/1001' or None)
     """
     logger.debug(f"[get_framerate] Getting framerate for: {input_file}")
 
-    def probe(entry: str, tools_path) -> str:
+    def probe(entry: str) -> str:
         cmd = [
-            f"ffprobe", "-v", "error",
+            "ffprobe", "-v", "error",
             "-select_streams", "v:0",
-            f"-show_entries", f"stream={entry}",
+            "-show_entries", f"stream={entry}",
             "-of", "default=noprint_wrappers=1:nokey=1",
-            input_file
+            input_file,
         ]
-        logger.debug(f"[get_framerate] FFmpeg command: {' '.join(cmd)}")
+        logger.debug(f"[get_framerate] FFprobe command: {' '.join(cmd)}")
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         return result.stdout.strip()
-    
-    def ffprobe_framerate_to_float(framerate_string):
-        # Remove any whitespace
+
+    def parse_framerate(framerate_string: str):
         framerate_string = framerate_string.strip()
-        
-        # Use the fractions module to parse and convert to float
+        if not framerate_string or framerate_string == "0/0":
+            return None, None
         fraction = Fraction(framerate_string)
-        return round(float(fraction), 3)
+        fps_float = round(float(fraction), 3)
+        exact_str = (
+            f"{fraction.numerator}/{fraction.denominator}"
+            if fraction.denominator != 1
+            else str(fraction.numerator)
+        )
+        return fps_float, exact_str
 
+    try:
+        # Try constant-frame-rate first, then fallback to average-frame-rate
+        for entry in ("r_frame_rate", "avg_frame_rate"):
+            raw = probe(entry)
+            logger.debug(f"[get_framerate] Probe {entry}: {raw}")
+            fps_float, exact_str = parse_framerate(raw)
+            if fps_float is not None and 10 <= fps_float <= 1000:
+                logger.debug(f"[get_framerate] Parsed {entry}: {fps_float} ({exact_str})")
+                return fps_float, exact_str
+    except Exception as e:
+        logger.error(f"[get_framerate] Error probing framerate for {input_file}: {e}")
 
-    # Try constant-frame-rate
-    raw = probe("r_frame_rate", tools_path)
-    logger.debug(f"[get_framerate] Probe r_frame_rate: {raw}")  # Logging probe output[2]
-    framerate_local = ffprobe_framerate_to_float(raw)
-    logger.debug(f"[get_framerate] Probe r_frame_rate: {framerate_local}")  # Logging probe output[2]
-    if 10 <= float(framerate_local) <= 1000:
-        return framerate_local
+    logger.error("[get_framerate] Framerate detection failed")
+    return False, None
 
-    # Fallback to variable-frame-rate
-    raw = probe("avg_frame_rate", tools_path)
-    logger.debug(f"[get_framerate] Probe avg_frame_rate: {raw}")  # Fallback probe logging[2]
-    framerate_local = ffprobe_framerate_to_float(raw)
-    logger.debug(f"[get_framerate] Probe r_frame_rate: {framerate_local}")  # Logging probe output[2]
-    if 10 <= float(framerate_local) <= 1000:
-        return framerate_local
-    
-    logger.error(f"[get_framerate] Framerate detection failed")
-    return False
 
 def get_fast_seek_support(file_path: str, scan_bytes: int = 1_048_576) -> bool:
     """
-    Determine whether a media file supports fast seek (HTTP byte‐range seeking).
+    Determine whether a media file supports fast seek.
 
     For MP4-family files, “moov” atom must precede “mdat” atom.
-    For Matroska (MKV), the EBML “Cues” element (ID 0x1C53BB6B) must precede the first “Cluster” element (ID 0x1F43B675).
-
-    Args:
-        file_path: Path to the media file.
-        scan_bytes: Number of initial bytes to scan (default 1 MB).
-
-    Returns:
-        True if the container’s index/meta atom appears before bulk media data; False otherwise.
+    For Matroska (MKV), either the EBML “Cues” element (0x1C53BB6B) precedes the first
+    “Cluster” element (0x1F43B675), OR a “SeekHead” element (0x114D9B74) before the first
+    Cluster indexes the Cues element.
     """
     ext = os.path.splitext(file_path)[1].lower()
     try:
@@ -471,49 +449,53 @@ def get_fast_seek_support(file_path: str, scan_bytes: int = 1_048_576) -> bool:
 
     if ext in (".mp4", ".m4v", ".mov", ".mp4v", ".ismv"):
         idx_index = data.find(b"moov")
-        idx_data  = data.find(b"mdat")
+        idx_data = data.find(b"mdat")
+        if idx_index == -1 or idx_data == -1:
+            return False
+        return idx_index < idx_data
+
     elif ext == ".mkv":
         # EBML IDs for Matroska:
-        #   Cues    -> 0x1C53BB6B
-        #   Cluster -> 0x1F43B675
-        cues_id    = b"\x1C\x53\xBB\x6B"
-        cluster_id = b"\x1F\x43\xB6\x75"
-        idx_index = data.find(cues_id)
-        idx_data  = data.find(cluster_id)
-    else:
-        # Unsupported container: assume no fast seek
+        #   SeekHead -> 0x114D9B74
+        #   Cues     -> 0x1C53BB6B
+        #   Cluster  -> 0x1F43B675
+        seekhead_id = b"\x11\x4D\x9B\x74"
+        cues_id = b"\x1C\x53\xBB\x6B"
+        cluster_id = b"\x1F\x43\xB675" if False else b"\x1F\x43\xB6\x75"
+
+        idx_cluster = data.find(cluster_id)
+        if idx_cluster == -1:
+            return False
+
+        # Direct Cues before first Cluster
+        idx_cues = data.find(cues_id)
+        if 0 <= idx_cues < idx_cluster:
+            return True
+
+        # Or SeekHead before first Cluster referencing the Cues EBML ID
+        idx_seekhead = data.find(seekhead_id)
+        if 0 <= idx_seekhead < idx_cluster and (cues_id in data[idx_seekhead:idx_cluster]):
+            return True
+
         return False
 
-    # Both index/meta and data must be present
-    if idx_index == -1 or idx_data == -1:
-        return False
+    return False
 
-    # Fast‐seek if index/meta precedes bulk media
-    return idx_index < idx_data
 
 def is_h265(file_path: str, ffprobe_path: str = "ffprobe") -> bool:
     """
-    Check whether the given video files primary video stream uses H.265/HEVC.
-
-    Args:
-        file_path: Path to the input video file.
-        ffprobe_path: Path to the ffprobe executable (default: "ffprobe").
-
-    Returns:
-        True if the first video streams codec is "hevc"; False otherwise.
+    Check whether the given video file's primary video stream uses H.265/HEVC.
     """
-    # Build ffprobe command to get stream codec information in JSON
     cmd = [
         ffprobe_path,
         "-v", "error",
         "-select_streams", "v:0",
         "-show_entries", "stream=codec_name",
         "-of", "json",
-        file_path
+        file_path,
     ]
 
     try:
-        # Run ffprobe and parse JSON output
         proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
         info = json.loads(proc.stdout)
     except (subprocess.CalledProcessError, json.JSONDecodeError):
@@ -525,64 +507,86 @@ def is_h265(file_path: str, ffprobe_path: str = "ffprobe") -> bool:
 
     codec = streams[0].get("codec_name", "").lower()
     return codec == "hevc"
-    
-def get_static_metadata(input_file: str) -> dict:
-    """
-    Extract static metadata from a video file using FFprobe.
 
-    Args:
-        video_path: Path to the input video file.
-        tools_path: Path to external tools directory (not used in this function).
+
+def get_static_metadata(input_file: str):
+    """
+    Extract static VUI and HDR10 side data metadata from both stream and first frame using FFprobe.
+    Gracefully falls back to DEFAULT_VUI and DEFAULT_SIDEDTA on any missing or malformed fields.
     """
     def parse_val(val):
-        if isinstance(val, str) and '/' in val:
-            n, d = map(int, val.split('/'))
-            return n / d
+        if isinstance(val, str) and "/" in val:
+            n, d = map(int, val.split("/"))
+            return n / d if d != 0 else 0.0
         return float(val)
 
+    def clean_vui_str(val, default="unknown") -> str:
+        if val is None:
+            return default
+        s = str(val).strip()
+        if not s or s.lower() in ("unknown", "unspecified", "none", "n/a"):
+            return default
+        return s
+
     cmd = [
-        "ffprobe", 
-        "-v", "quiet", 
-        "-select_streams", "v:0", 
-        "-show_streams", 
-        "-print_format", "json", 
-        input_file
+        "ffprobe",
+        "-v", "quiet",
+        "-select_streams", "v:0",
+        "-read_intervals", "%+#1",
+        "-show_streams",
+        "-show_frames",
+        "-print_format", "json",
+        input_file,
     ]
 
+    VUI = DEFAULT_VUI.copy()
+    SideDTA = DEFAULT_SIDEDTA.copy()
+
     try:
-        # 1. Run command and capture output (stdout)
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        
-        # 2. Parse the JSON string from stdout directly
         data = json.loads(result.stdout)
 
-        VUI = dict()
-        VUI["color_primaries"] = "unknown"
-        VUI["color_space"] = "unknown"
-        VUI["color_transfer"] = "unknown"
-        VUI["chroma_location"] = "unknown"
-        SideDTA = dict()
-        SideDTA["Cll_exists"] = False
-        SideDTA["Mastering_display_exists"] = False
-        
-        # 3. extract the first stream (since we used v:0)
-        if "streams" in data and len(data["streams"]) > 0:
-    
-            json_data = data["streams"][0]
-            VUI["color_primaries"] = json_data.get("color_primaries", "unknown")
-            VUI["color_space"] = json_data.get("color_space", "unknown")
-            VUI["color_transfer"] = json_data.get("color_transfer", "unknown")
-            VUI["chroma_location"] = json_data.get("chroma_location", "unknown")
+        streams = data.get("streams", [])
+        if not streams:
+            logger.warning(f"[get_static_metadata] No video stream found in {input_file}; using VUI defaults")
+            return VUI, SideDTA
 
-            side_data_list = json_data.get("side_data_list", [])
+        json_data = streams[0]
+        frames = data.get("frames", [])
+        first_frame = frames[0] if frames else {}
 
-            for side_data in side_data_list:
-                if 'Content light level metadata' in side_data.values():
-                    SideDTA["max_content"] = side_data["max_content"]
-                    SideDTA["max_average"] = side_data["max_average"]
+        # Prefer stream VUI tags, falling back to first-frame tags if stream tags are missing/unknown
+        for key, default in (
+            ("color_primaries", "unknown"),
+            ("color_space", "unknown"),
+            ("color_transfer", "unknown"),
+            ("chroma_location", "unknown"),
+            ("color_range", "tv"),
+        ):
+            val = clean_vui_str(json_data.get(key), "unknown")
+            if val == "unknown":
+                val = clean_vui_str(first_frame.get(key), default)
+            VUI[key] = val
+
+        # Combine side_data_list from both stream container and first decoded frame
+        side_data_list = list(json_data.get("side_data_list", [])) + list(first_frame.get("side_data_list", []))
+
+        for side_data in side_data_list:
+            if not isinstance(side_data, dict):
+                continue
+
+            sd_type = side_data.get("side_data_type", "")
+
+            if sd_type == "Content light level metadata" or "Content light level metadata" in side_data.values():
+                try:
+                    SideDTA["max_content"] = int(side_data["max_content"])
+                    SideDTA["max_average"] = int(side_data["max_average"])
                     SideDTA["Cll_exists"] = True
+                except (KeyError, ValueError, TypeError) as e:
+                    logger.warning(f"[get_static_metadata] Incomplete Content Light Level metadata: {e}")
 
-                if 'Mastering display metadata' in side_data.values():
+            if sd_type == "Mastering display metadata" or "Mastering display metadata" in side_data.values():
+                try:
                     SideDTA["red_x"] = parse_val(side_data["red_x"])
                     SideDTA["red_y"] = parse_val(side_data["red_y"])
                     SideDTA["green_x"] = parse_val(side_data["green_x"])
@@ -594,20 +598,21 @@ def get_static_metadata(input_file: str) -> dict:
                     SideDTA["min_luminance"] = parse_val(side_data["min_luminance"])
                     SideDTA["max_luminance"] = parse_val(side_data["max_luminance"])
                     SideDTA["Mastering_display_exists"] = True
-                    
-            return VUI, SideDTA
-        else:
-            print("No video stream found.")
-            return None
+                except (KeyError, ValueError, TypeError) as e:
+                    logger.warning(f"[get_static_metadata] Incomplete Mastering Display metadata: {e}")
+
+        return VUI, SideDTA
 
     except subprocess.CalledProcessError as e:
-        print(f"FFprobe execution failed: {e}")
-        return None
-    except json.JSONDecodeError:
-        print("Failed to decode JSON from FFprobe output.")
-        return None
+        logger.warning(f"[get_static_metadata] FFprobe execution failed for {input_file}: {e}; using defaults")
+        return VUI, SideDTA
+    except json.JSONDecodeError as e:
+        logger.warning(f"[get_static_metadata] Failed to decode FFprobe JSON for {input_file}: {e}; using defaults")
+        return VUI, SideDTA
+    except Exception as e:
+        logger.warning(f"[get_static_metadata] Unexpected error extracting VUI for {input_file}: {e}; using defaults")
+        return VUI, SideDTA
 
-# --- Usage ---
-if __name__ == '__main__':
 
+if __name__ == "__main__":
     None

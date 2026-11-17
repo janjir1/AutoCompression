@@ -305,7 +305,9 @@ def getVMAF(reference_file: str, distorted_file: str, VPC, threads: int = 8) -> 
 
      # Define the ffmpeg command to compute VMAF with multithreading
     output_file = r"VMAFlog.json"
-
+    # TODO: Check if cuda is available before running vmaf-cuda
+    # TODO: Investigate 10-bit libvmaf_cuda (format=yuv420p10le) so 10-bit HDR/debanded videos aren't truncated to 8-bit during VMAF
+   
     cuda_init = ['-init_hw_device', 'cuda=cu:0', '-filter_hw_device', 'cu']
     vmaf_graph = (
         "[0:v]format=yuv420p,hwupload_cuda[a];"
@@ -649,56 +651,50 @@ def _extractAudio(orig_video_path: str, work_folder: str, duration: int) -> str:
 #region Blackbars
 def detectBlackbars(VPC: VideoProcessingConfig) -> bool:
     """
-    Detects black bars in a video by sampling frames and analyzing the central column of each frame
-    for consecutive black pixels from the top and bottom.
-
-    Args:
-        VPC (VideoProcessingConfig): Video processing configuration
-
-    Returns:
-        bool: True if conversion succeeded, False otherwise
+    Detects top and bottom black bars using FFmpeg's native cropdetect filter
+    across sampled timestamps without writing temporary PNG files.
     """
-    blackbars_VPC = VPC.create_copy()
-    name = VPC.output_file_name + "_blackDetection"
-    blackbars_VPC.setWorkspace(os.path.join(VPC.workspace, name))
-
     frames_to_detect = VPC.test_settings["Black_bar_detection"]["frames_to_detect"]
-    timestep = int(VPC.orig_duration/(frames_to_detect+1))
+    timestep = VPC.orig_duration / (frames_to_detect + 1)
 
-    # Initialize lists to hold the black pixel counts for each sampled frame
-    black_top = [0] * frames_to_detect
-    black_bottom = [0] * frames_to_detect
+    black_top = []
+    black_bottom = []
+    crop_re = re.compile(r"crop=(\d+):(\d+):(\d+):(\d+)")
 
-    # Process each frame for black bar detection
-    for timestamp in range(frames_to_detect):
-        timestamp = timestamp + 1
+    for i in range(1, frames_to_detect + 1):
+        seek_time = round(i * timestep, 3)
+        command = [
+            "ffmpeg",
+            "-v", "info",
+            "-ss", str(seek_time),
+            "-i", VPC.orig_file_path,
+            "-frames:v", "3",
+            "-vf", "cropdetect=limit=0.1:round=2:reset=0",
+            "-f", "null",
+            "-",
+        ]
 
-        # Define output filename and path for the extracted frame
-        picture_name = str(timestamp) + ".png"
-        target_name = os.path.join(blackbars_VPC.workspace, picture_name)
-        exportFrame(blackbars_VPC, target_name, timestamp*timestep)
-        
-        # Open the image and load pixel data
-        im = Image.open(target_name, 'r')
-        pix = im.load()
+        process = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if process.returncode != 0:
+            logger.error(f"FFmpeg cropdetect failed at {seek_time}s: {process.stderr.strip()}")
+            continue
 
-        # Count consecutive black pixels from the top
-        for i in range(0, im.size[1], 1):
-            if all(channel < 10 for channel in pix[im.size[0] // 2, i]):
-                black_top[timestamp-1] += 1
-            else:
-                break
+        matches = crop_re.findall(process.stderr)
+        if matches:
+            _, h, _, y = map(int, matches[-1])
+            top = y
+            bottom = max(0, VPC.orig_v_res - h - y)
+            black_top.append(top)
+            black_bottom.append(bottom)
 
-        # Count consecutive black pixels from the bottom
-        for i in range(im.size[1]-1, -1, -1):
-            if all(channel < 10 for channel in pix[im.size[0] // 2, i]):
-                black_bottom[timestamp-1] += 1
-            else:
-                break
+    if not black_top or not black_bottom:
+        logger.warning("cropdetect produced no results; defaulting crop to [0, 0]")
+        VPC.crop = [0, 0]
+        return False
 
-    # Use the minimum value across all frames to get a robust estimate
-    black_top_result = min(black_top)
-    black_bottom_result = min(black_bottom)
+    # Take the minimum crop across all sampled frames and enforce even-pixel alignment
+    black_top_result = (min(black_top) // 2) * 2
+    black_bottom_result = (min(black_bottom) // 2) * 2
 
     if black_bottom_result != 0 or black_top_result != 0:
         logger.info(f"Black bars detected: {black_top_result}pix from top, {black_bottom_result}pix from bottom")
@@ -706,7 +702,6 @@ def detectBlackbars(VPC: VideoProcessingConfig) -> bool:
         logger.info("No black bars detected")
 
     VPC.crop = [black_top_result, black_bottom_result]
-    compressor2.delete_file(VPC, blackbars_VPC.workspace)
     return True
 
 def exportFrame(VPC: VideoProcessingConfig, target_name_path: str, time: int, png_quality: int = 2) -> None:
