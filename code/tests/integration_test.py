@@ -273,7 +273,7 @@ class _PipelineTestBase:
         workspace = str(tmp_path_factory.mktemp(f"case_{case['id']}"))
 
         vpc = VideoProcessingConfig(source_path, f"pipeline_case_{case['id']}", workspace)
-        vpc.readProfiles(case["profile"], FAST_SETTINGS, None)
+        vpc.readProfiles(case["profile"], FAST_SETTINGS)
         assert "HDR_enable" in vpc.profile, (
             f"Profile {case['profile']!r} for case {case['id']!r} is missing 'HDR_enable' - "
             f"wrong profile file specified?"
@@ -452,15 +452,25 @@ class _PipelineTestBase:
             pytest.skip("DoVi + HEVC output only (dovi_tool cannot read AV1)")
         if not shutil.which("dovi_tool"):
             pytest.skip("dovi_tool not installed")
+        hevc_path = str(tmp_path / "out.hevc")
         rpu = str(tmp_path / "out_rpu.bin")
         dump = str(tmp_path / "out_rpu.json")
-        r = run_tool("dovi_tool", "extract-rpu", "-i", self._out(), "-o", rpu)
+        r = run_tool(
+            "ffmpeg", "-y", "-v", "error",
+            "-i", self._out(),
+            "-map", "0:V:0", "-c:v", "copy",
+            "-bsf:v", "hevc_mp4toannexb",
+            "-f", "hevc", hevc_path,
+        )
+        assert r.returncode == 0, r.stderr
+        r = run_tool("dovi_tool", "extract-rpu", "-i", hevc_path, "-o", rpu)
         assert r.returncode == 0, r.stderr
         r = run_tool("dovi_tool", "export", "-i", rpu, "-d", f"all={dump}")
         assert r.returncode == 0, r.stderr
         with open(dump) as f:
             data = json.load(f)
-        assert len(data) == count_frames(self._out()), f"{len(data)} RPUs for {count_frames(self._out())} frames"
+        frame_count = count_frames(self._out())
+        assert len(data) == frame_count, f"{len(data)} RPUs for {frame_count} frames"
         for key in ("active_area_top_offset", "active_area_bottom_offset",
                     "active_area_left_offset", "active_area_right_offset"):
             values = find_values(data, key)
@@ -473,13 +483,23 @@ class _PipelineTestBase:
             pytest.skip("HDR10+ + HEVC output only (hdr10plus_tool cannot read AV1)")
         if not shutil.which("hdr10plus_tool"):
             pytest.skip("hdr10plus_tool not installed")
+        hevc_path = str(tmp_path / "out.hevc")
         dump = str(tmp_path / "out_hdr10plus.json")
-        r = run_tool("hdr10plus_tool", "extract", self._out(), "-o", dump)
+        r = run_tool(
+            "ffmpeg", "-y", "-v", "error",
+            "-i", self._out(),
+            "-map", "0:V:0", "-c:v", "copy",
+            "-bsf:v", "hevc_mp4toannexb",
+            "-f", "hevc", hevc_path,
+        )
+        assert r.returncode == 0, r.stderr
+        r = run_tool("hdr10plus_tool", "extract", hevc_path, "-o", dump)
         assert r.returncode == 0, r.stderr
         with open(dump) as f:
             scenes = json.load(f)["SceneInfo"]
-        assert len(scenes) == count_frames(self._out()), \
-            f"{len(scenes)} HDR10+ entries for {count_frames(self._out())} frames"
+        frame_count = count_frames(self._out())
+        assert len(scenes) == frame_count, \
+            f"{len(scenes)} HDR10+ entries for {frame_count} frames"
 
 
 def _make_pipeline_test_class(case):

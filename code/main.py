@@ -2,6 +2,7 @@ from AVTest import runTests
 import logging
 import logger_setup
 import os
+import sys
 import compressor2
 import argparse
 from VideoClass import VideoProcessingConfig
@@ -22,37 +23,44 @@ def compressAV(VPC: VideoProcessingConfig) -> bool:
 
     logger.debug('Profile values:')
     logger.debug(VPC.profile)
-   
+
     orig_file_size_GB = os.stat(VPC.orig_file_path).st_size / (1024 * 1024 * 1024)
     logger.info(f"Original file is {orig_file_size_GB:.3f}GB")
 
     passed = runTests(VPC)
     if not passed:
-        logger.info(f"Some tests Failed")
+        logger.info("Some tests Failed")
     else:
-        logger.info(f"Tests finished succesfully")
+        logger.info("Tests finished succesfully")
 
     VPC.export_to_txt()
-    
+
     if VPC.test_settings["Export_output"]["Enabled"]:
         VPC.is_final_export = True
         result = compressor2.compress(VPC)
         if not result:
-            logger.info(f"Conversion failed")
+            logger.info("Conversion failed")
             return False
-        
+
         output_file_size_GB = os.stat(VPC.output_file_path).st_size / (1024 * 1024 * 1024)
         logger.info(f"Output file is {output_file_size_GB:.3f}GB")
-        logger.info(f"Output file is {(orig_file_size_GB/output_file_size_GB):.3f}x size of original")
+        if orig_file_size_GB > 0 and output_file_size_GB > 0:
+            pct = (output_file_size_GB / orig_file_size_GB) * 100
+            ratio = orig_file_size_GB / output_file_size_GB
+            logger.info(f"Output file is {pct:.1f}% of original ({ratio:.2f}x smaller)")
 
     else:
-        logger.info(f"Export output is disabled")
+        logger.info("Export output is disabled")
 
-    logger.info(f"Program finished succesfully")
+    logger.info("Program finished succesfully")
     return True
 
-def init(file, file_name, profile_path, settings_path, workspaces, tools_path) -> tuple[VideoProcessingConfig, logging.Logger, logging.Logger]:
-     
+
+def init(file, file_name, profile_path, settings_path, workspaces) -> tuple[VideoProcessingConfig, logging.Logger, logging.Logger]:
+
+    if not os.path.isfile(file):
+        raise FileNotFoundError(f"Input file not found: {file}")
+
     workspace = os.path.join(workspaces, file_name)
 
     if not os.path.exists(workspace):
@@ -66,8 +74,9 @@ def init(file, file_name, profile_path, settings_path, workspaces, tools_path) -
     stream_logger = logger_setup.file_logger(log_path, log_level=logging.DEBUG)
 
     VPC = VideoProcessingConfig(file, file_name, workspace)
-    VPC.readProfiles(profile_path, settings_path, tools_path)
-    VPC.analyzeOriginal()
+    VPC.readProfiles(profile_path, settings_path)
+    if not VPC.analyzeOriginal():
+        raise RuntimeError(f"Failed to analyze input video (or unsupported format): {file}")
 
     VPC.setSourcePath(VPC.orig_file_path)
 
@@ -78,10 +87,8 @@ def init(file, file_name, profile_path, settings_path, workspaces, tools_path) -
 
     return VPC, logger, stream_logger
 
-     
 
 if __name__ == '__main__':
-
 
     parser = argparse.ArgumentParser(
         description='Run auto‐compression for a single movie file.'
@@ -96,12 +103,15 @@ if __name__ == '__main__':
                         help='Path to the settings YAML.')
     parser.add_argument('--workspace',    '-w', required=True,
                         help='Base workspace directory.')
-    parser.add_argument('--tools',        '-t', required=False,
-                        help='Does nothing, now')
 
     args = parser.parse_args()
 
-    VPC, logger, stream_logger = init(args.input_file, args.movie_name, args.profile, args.settings, args.workspace, args.tools)
+    try:
+        VPC, logger, stream_logger = init(args.input_file, args.movie_name, args.profile, args.settings, args.workspace)
+    except (FileNotFoundError, RuntimeError) as e:
+        print(f"Initialization failed: {e}", file=sys.stderr)
+        sys.exit(1)
+
     passed = compressAV(VPC)
 
     print(passed)
@@ -113,10 +123,9 @@ if __name__ == '__main__':
 
         Edit log messages
         Logger doesnt work in multithreading
-        
+
         Include metadata for windows (length, resolution)
-        delete VMAFlog.json after execution of vmaf
-        fix output size calculation/comparison mesage
         Documentation - doxygen
+        Dolby Vision Profile 5 conversion/reshaping
 
     """

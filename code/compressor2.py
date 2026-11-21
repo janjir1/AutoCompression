@@ -14,10 +14,13 @@ from VideoClass import VideoProcessingConfig
 
 # TODO:
 # - Clean up leftover VapourSynth .lwi index files inside delete_file() (e.g. str(file) + ".lwi")
+#   and remove stale .lwi cache files before reusing the same filename.
 # - Fast-seek MKV Cues issue (in VideoClass.py / temporal_crop): MakeMKV and mkvmerge usually place
 #   the Matroska Cues (0x1C53BB6B) at the end of the file and point to it via SeekHead (0x114D9B74)
 #   at the beginning. Scanning only the first 1 MB for Cues before Cluster causes get_fast_seek_support()
 #   to return False on valid MKVs, forcing slow output seeking (-ss after -i) in temporal_crop().
+# - Implement Dolby Vision Profile 5 conversion/reshaping (currently rejected early).
+# - NOTE / TODO: Pipeline assumes square pixels (SAR 1:1); anamorphic sources (e.g. DVDs) are not handled.
 
 # Retrieve the logger once at the module level
 logger = logging.getLogger("AppLogger")
@@ -39,6 +42,11 @@ def compress(VPC: VideoProcessingConfig) -> bool:
         f"[compress] Compression parameters - Profile: {VPC.profile['function'][1]}, "
         f"Target resolution: {VPC.output_res}, CQ: {VPC.output_cq}, Crop: {VPC.crop}"
     )
+
+    if getattr(VPC, "dv_profile", None) == 5:
+        # TODO: Implement Dolby Vision Profile 5 conversion/reshaping
+        logger.error("[compress] Dolby Vision Profile 5 is not supported yet, aborting compression")
+        return False
 
     # Handle temporal cropping if start time or duration is specified
     if VPC.start is not False or VPC.duration is not False:
@@ -316,9 +324,11 @@ def temporal_crop(VPC: VideoProcessingConfig, NoFS_offset: int = 6) -> bool:
         ]
 
     command += [
+        "-map", "0:V:0",
         "-c:v", "copy",
         "-an",
-        "-copy_unknown",
+        "-sn",
+        "-dn",
         VPC.target_path,
     ]
 
@@ -342,12 +352,33 @@ def temporal_crop(VPC: VideoProcessingConfig, NoFS_offset: int = 6) -> bool:
 # Shared HDR Extraction & Injection Helpers
 # =====================================================================
 
+def _hevc_annexb_pipe_cmd(source_path: str, frame_limit=None) -> list:
+    """Build FFmpeg command that demuxes the main HEVC track to Annex-B on stdout."""
+    cmd = [
+        "ffmpeg", "-v", "error",
+        "-i", str(source_path),
+        "-map", "0:V:0",
+        "-c:v", "copy",
+        "-bsf:v", "hevc_mp4toannexb",
+        "-f", "hevc",
+    ]
+    if frame_limit is not None:
+        cmd += ["-frames:v", str(frame_limit)]
+    cmd.append("-")
+    return cmd
+
+
 def get_video_metadata_type(VPC: VideoProcessingConfig) -> bool:
     """
     Detect and cache the dynamic HDR metadata type present in a video file ("DoVi", "HDR10", or "None").
     """
     if VPC.HDR_type != "uninit":
         logger.debug(f"[get_video_metadata_type] Using cached metadata type: {VPC.HDR_type}")
+        return True
+
+    if not getattr(VPC, "is_H265", False):
+        logger.debug("[get_video_metadata_type] Non-HEVC source; skipping dynamic HDR detection")
+        VPC.HDR_type = "None"
         return True
 
     logger.debug(f"[get_video_metadata_type] Starting HDR metadata type detection for: {VPC.source_path}")
@@ -357,14 +388,12 @@ def get_video_metadata_type(VPC: VideoProcessingConfig) -> bool:
         else None
     )
 
-    # Try Dolby Vision first
-    dovi_tool_path = "dovi_tool"
-    dovi = [dovi_tool_path, "-m", "2", "extract-rpu", "-i", str(VPC.source_path), "-o", str(VPC.dovi_metadata_file)]
-    if frame_limit is not None:
-        dovi += ["--limit", str(frame_limit)]
+    ffmpeg_pipe = _hevc_annexb_pipe_cmd(VPC.source_path, frame_limit=frame_limit)
 
-    logger.debug(f"[get_video_metadata_type] DoVi extraction command: {' '.join(dovi)}")
-    if not execute(dovi):
+    # Try Dolby Vision first
+    dovi = ["dovi_tool", "-m", "2", "extract-rpu", "-", "-o", str(VPC.dovi_metadata_file)]
+    logger.debug(f"[get_video_metadata_type] DoVi extraction pipeline: {' '.join(ffmpeg_pipe)} | {' '.join(dovi)}")
+    if not execute_pipeline([ffmpeg_pipe, dovi]):
         logger.warning("[get_video_metadata_type] DoVi tool execution failed")
 
     if check_output(VPC.dovi_metadata_file, size_limit=100):
@@ -374,13 +403,9 @@ def get_video_metadata_type(VPC: VideoProcessingConfig) -> bool:
 
     # Try HDR10+ as fallback
     logger.debug("[get_video_metadata_type] Dolby Vision not detected, attempting HDR10+ metadata extraction")
-    hdr10plus_tool_path = "hdr10plus_tool"
-    hdr10plus = [hdr10plus_tool_path, "extract", str(VPC.source_path), "-o", str(VPC.HDR10_metadata_file)]
-    if frame_limit is not None:
-        hdr10plus += ["--limit", str(frame_limit)]
-
-    logger.debug(f"[get_video_metadata_type] HDR10+ extraction command: {' '.join(hdr10plus)}")
-    if not execute(hdr10plus):
+    hdr10plus = ["hdr10plus_tool", "extract", "-o", str(VPC.HDR10_metadata_file), "-"]
+    logger.debug(f"[get_video_metadata_type] HDR10+ extraction pipeline: {' '.join(ffmpeg_pipe)} | {' '.join(hdr10plus)}")
+    if not execute_pipeline([ffmpeg_pipe, hdr10plus]):
         logger.warning("[get_video_metadata_type] HDR10+ tool execution failed")
 
     if check_output(VPC.HDR10_metadata_file):
@@ -395,14 +420,66 @@ def get_video_metadata_type(VPC: VideoProcessingConfig) -> bool:
 
 def crop_dovi_rpu(VPC: VideoProcessingConfig) -> bool:
     """
-    Update DoVi RPU active-area metadata to match applied crop using a safe temporary file.
+    Update DoVi RPU Level 5 active-area metadata to match applied crop and/or resolution scaling.
     """
-    if VPC.crop == [0, 0]:
+    crop_top = (int(VPC.crop[0]) // 2) * 2
+    crop_bottom = (int(VPC.crop[1]) // 2) * 2
+    is_cropped = crop_top > 0 or crop_bottom > 0
+    is_scaled = VPC.output_res != VPC.orig_h_res
+
+    if not is_cropped and not is_scaled:
         return True
 
-    edit_config = {"active_area": {"crop": True}}
+    l5_export_path = os.path.join(VPC.workspace, "dovi_l5_export.json")
     edit_config_path = os.path.join(VPC.workspace, "dovi_edit.json")
     tmp_rpu_file = str(VPC.dovi_metadata_file) + ".tmp"
+
+    export_cmd = [
+        "dovi_tool", "export",
+        "-i", str(VPC.dovi_metadata_file),
+        "-d", f"level5={l5_export_path}",
+    ]
+
+    edit_config = None
+    if execute(export_cmd) and os.path.isfile(l5_export_path):
+        try:
+            with open(l5_export_path, "r", encoding="utf-8") as f:
+                l5_data = json.load(f)
+
+            # Support both dovi_tool <2.3 (top-level presets/edits) and >=2.3 (nested under active_area)
+            active_area = l5_data.get("active_area", l5_data) if isinstance(l5_data, dict) else {}
+            presets = active_area.get("presets", [])
+
+            if presets:
+                cropped_v = VPC.orig_v_res - crop_top - crop_bottom
+                if cropped_v <= 0:
+                    cropped_v = VPC.orig_v_res
+                    crop_top = 0
+                    crop_bottom = 0
+
+                scale_x = VPC.output_res / VPC.orig_h_res if is_scaled else 1.0
+                if is_scaled:
+                    scaled_v = max(2, round(cropped_v * scale_x / 2) * 2)
+                    scale_y = scaled_v / cropped_v
+                else:
+                    scale_y = 1.0
+
+                for preset in presets:
+                    preset["left"] = round(max(0, preset.get("left", 0)) * scale_x)
+                    preset["right"] = round(max(0, preset.get("right", 0)) * scale_x)
+                    preset["top"] = round(max(0, preset.get("top", 0) - crop_top) * scale_y)
+                    preset["bottom"] = round(max(0, preset.get("bottom", 0) - crop_bottom) * scale_y)
+
+                edit_config = {"active_area": active_area}
+        except Exception as e:
+            logger.warning(f"[crop_dovi_rpu] Failed to parse exported L5 metadata: {e}")
+
+    if edit_config is None:
+        if is_cropped:
+            edit_config = {"active_area": {"crop": True}}
+        else:
+            logger.debug("[crop_dovi_rpu] No L5 active-area presets found to scale; skipping RPU edit")
+            return True
 
     with open(edit_config_path, "w", encoding="utf-8") as f:
         json.dump(edit_config, f)
@@ -415,7 +492,7 @@ def crop_dovi_rpu(VPC: VideoProcessingConfig) -> bool:
     ]
     logger.debug(f"[crop_dovi_rpu] Command: {' '.join(command)}")
     if not execute(command) or not check_output(tmp_rpu_file, size_limit=100):
-        logger.error("[crop_dovi_rpu] DoVi RPU crop edit failed")
+        logger.error("[crop_dovi_rpu] DoVi RPU crop/scale edit failed")
         return False
 
     os.replace(tmp_rpu_file, VPC.dovi_metadata_file)
@@ -436,34 +513,36 @@ def video_HDR_extract(VPC: VideoProcessingConfig) -> bool:
 
     if VPC.HDR_type == "DoVi":
         logger.debug("[video_HDR_extract] Extracting Dolby Vision RPU metadata (-m 2)")
+        ffmpeg_pipe = _hevc_annexb_pipe_cmd(VPC.source_path)
         dovi = [
             "dovi_tool", "-m", "2", "extract-rpu",
-            "-i", str(VPC.source_path),
+            "-",
             "-o", str(VPC.dovi_metadata_file),
         ]
-        logger.debug(f"[video_HDR_extract] DoVi extraction command: {' '.join(dovi)}")
+        logger.debug(f"[video_HDR_extract] DoVi extraction pipeline: {' '.join(ffmpeg_pipe)} | {' '.join(dovi)}")
 
-        if not execute(dovi, timeout=3600 * 4):
+        if not execute_pipeline([ffmpeg_pipe, dovi], timeout=3600 * 4):
             logger.error("[video_HDR_extract] DoVi extraction failed")
             return False
         if not check_output(VPC.dovi_metadata_file, size_limit=100):
             logger.error("[video_HDR_extract] DoVi metadata file validation failed")
             return False
         if not crop_dovi_rpu(VPC):
-            logger.error("[video_HDR_extract] DoVi RPU crop adjustment failed")
+            logger.error("[video_HDR_extract] DoVi RPU crop/scale adjustment failed")
             return False
         return True
 
     elif VPC.HDR_type == "HDR10":
         logger.debug("[video_HDR_extract] Extracting HDR10+ dynamic metadata")
+        ffmpeg_pipe = _hevc_annexb_pipe_cmd(VPC.source_path)
         hdr10plus = [
             "hdr10plus_tool", "extract",
-            str(VPC.source_path),
             "-o", str(VPC.HDR10_metadata_file),
+            "-",
         ]
-        logger.debug(f"[video_HDR_extract] HDR10+ extraction command: {' '.join(hdr10plus)}")
+        logger.debug(f"[video_HDR_extract] HDR10+ extraction pipeline: {' '.join(ffmpeg_pipe)} | {' '.join(hdr10plus)}")
 
-        if not execute(hdr10plus, timeout=3600 * 4):
+        if not execute_pipeline([ffmpeg_pipe, hdr10plus], timeout=3600 * 4):
             logger.error("[video_HDR_extract] HDR10+ extraction failed")
             return False
         if not check_output(VPC.HDR10_metadata_file):
@@ -519,21 +598,24 @@ def video_HDR_inject(VPC: VideoProcessingConfig) -> bool:
 
 MKV_PRIMARIES = {
     "bt709": 1, "bt470m": 4, "bt470bg": 5, "smpte170m": 6, "bt601": 6,
-    "smpte240m": 7, "film": 8, "bt2020": 9, "smpte428": 10,
-    "smpte431": 11, "smpte432": 12, "jedec-p22": 22, "ebu3213": 22,
+    "smpte240m": 7, "smpte240": 7, "film": 8, "bt2020": 9,
+    "smpte428": 10, "xyz": 10, "smpte431": 11, "smpte432": 12,
+    "jedec-p22": 22, "ebu3213": 22,
 }
 MKV_TRANSFER = {
-    "bt709": 1, "gamma22": 4, "gamma28": 5, "smpte170m": 6, "bt601": 6,
-    "smpte240m": 7, "linear": 8, "log": 9, "log_sqrt": 10,
-    "iec61966-2-4": 11, "bt1361e": 12, "iec61966-2-1": 13,
-    "bt2020-10": 14, "bt2020-12": 15, "smpte2084": 16,
-    "smpte428": 17, "arib-std-b67": 18,
+    "bt709": 1, "gamma22": 4, "bt470m": 4, "gamma28": 5, "bt470bg": 5,
+    "smpte170m": 6, "bt601": 6, "smpte240m": 7, "smpte240": 7, "linear": 8,
+    "log": 9, "log100": 9, "log_sqrt": 10, "log100-sqrt10": 10,
+    "iec61966-2-4": 11, "iec61966": 11, "bt1361e": 12, "bt1361": 12,
+    "iec61966-2-1": 13, "srgb": 13, "bt2020-10": 14, "bt2020-12": 15,
+    "smpte2084": 16, "pq": 16, "smpte428": 17, "arib-std-b67": 18, "hlg": 18,
 }
 MKV_MATRIX = {
-    "gbr": 0, "rgb": 0, "bt709": 1, "fcc": 4, "bt470bg": 5,
-    "smpte170m": 6, "bt601": 6, "smpte240m": 7, "ycgco": 8,
-    "bt2020nc": 9, "bt2020c": 10, "smpte2085": 11,
-    "chroma-derived-nc": 12, "chroma-derived-c": 13, "ictcp": 14,
+    "gbr": 0, "rgb": 0, "identity": 0, "bt709": 1, "fcc": 4, "bt470bg": 5,
+    "smpte170m": 6, "bt601": 6, "smpte240m": 7, "smpte240": 7, "ycgco": 8,
+    "bt2020nc": 9, "bt2020-ncl": 9, "bt2020c": 10, "bt2020-cl": 10,
+    "smpte2085": 11, "chroma-derived-nc": 12, "chroma-ncl": 12,
+    "chroma-derived-c": 13, "chroma-cl": 13, "ictcp": 14,
 }
 
 
@@ -546,7 +628,7 @@ def mkvmerge_colour_args(VPC: VideoProcessingConfig) -> list:
     for option, key, table in (
         ("--colour-primaries", "color_primaries", MKV_PRIMARIES),
         ("--colour-transfer-characteristics", "color_transfer", MKV_TRANSFER),
-        ("--colour-matrix", "color_space", MKV_MATRIX),
+        ("--colour-matrix-coefficients", "color_space", MKV_MATRIX),
     ):
         number = table.get(str(VPC.VUI.get(key, "")).strip().lower())
         if number is not None:
@@ -579,9 +661,7 @@ def mkvmerge_colour_args(VPC: VideoProcessingConfig) -> list:
 def finalize_mkv(VPC: VideoProcessingConfig, is_elementary: bool) -> bool:
     """
     Unified MKV finalizer shared by both FFmpeg (H.265) and SVT-AV1 pipelines.
-    Runs mkvmerge first to attach exact timing, colour, and static HDR10 tags,
-    then remuxes with FFmpeg (-c:v copy) so the final MKV uses unlaced SimpleBlocks
-    compatible with dovi_tool and hdr10plus_tool.
+    Runs mkvmerge directly to write exact timing, seek cues, colour, and static HDR10 tags.
     """
     colour_args = mkvmerge_colour_args(VPC)
     timeout = 6 * 3600 if VPC.is_final_export else 3600
@@ -590,37 +670,20 @@ def finalize_mkv(VPC: VideoProcessingConfig, is_elementary: bool) -> bool:
     fps_arg = f"0:{raw_fps}p" if raw_fps else f"0:{VPC.orig_framerate}fps"
 
     if is_elementary:
-        tmp_mkv = str(VPC.target_path) + ".mkvmerge.mkv"
-        logger.debug(f"[finalize_mkv] Muxing elementary stream with mkvmerge: {VPC.source_path} -> {tmp_mkv}")
+        logger.debug(f"[finalize_mkv] Muxing elementary stream with mkvmerge: {VPC.source_path} -> {VPC.target_path}")
         mkv_cmd = [
             "mkvmerge",
-            "-o", tmp_mkv,
+            "-o", str(VPC.target_path),
             "--default-duration", fps_arg,
-            "--fix-bitstream-timing-information", "0",
             "--cues", "0:iframes",
             "--clusters-in-meta-seek",
-            *colour_args,
-            str(VPC.source_path),
         ]
-        if not execute(mkv_cmd, timeout=timeout) or not check_output(tmp_mkv):
-            logger.error("[finalize_mkv] mkvmerge elementary mux failed")
-            return False
+        if str(VPC.source_path).lower().endswith((".hevc", ".h265", ".265")):
+            mkv_cmd += ["--fix-bitstream-timing-information", "0:1"]
+        mkv_cmd += [*colour_args, str(VPC.source_path)]
 
-        # Re-wrap with FFmpeg so blocks are unlaced (required by dovi_tool / hdr10plus_tool)
-        # while keeping all Matroska colour, static HDR10, and DoVi headers written by mkvmerge.
-        ffmpeg_cmd = [
-            "ffmpeg", "-y", "-v", "error",
-            "-i", tmp_mkv,
-            "-map", "0:v:0",
-            "-c:v", "copy",
-            "-map_metadata", "0",
-            str(VPC.target_path),
-        ]
-        ok = execute(ffmpeg_cmd, timeout=timeout) and check_output(VPC.target_path)
-        if os.path.isfile(tmp_mkv):
-            os.remove(tmp_mkv)
-        if not ok:
-            logger.error("[finalize_mkv] FFmpeg final MKV remux failed")
+        if not execute(mkv_cmd, timeout=timeout) or not check_output(VPC.target_path):
+            logger.error("[finalize_mkv] mkvmerge elementary mux failed")
             return False
         return True
     else:
@@ -639,24 +702,31 @@ def finalize_mkv(VPC: VideoProcessingConfig, is_elementary: bool) -> bool:
 # Shared Filters & Deband Helpers
 # =====================================================================
 
-def vfCropComandGenerator(VPC: VideoProcessingConfig) -> str:
-    """
-    Generate FFmpeg crop and Lanczos scale filter string with even-pixel alignment
-    and +full_chroma_int for clean 10-bit 4:2:0 scaling.
-    """
+def _validated_crop(VPC: VideoProcessingConfig) -> tuple[int, int, int]:
+    """Return validated even (crop_top, crop_bottom, target_v_res)."""
     crop_top = (int(VPC.crop[0]) // 2) * 2
     crop_bottom = (int(VPC.crop[1]) // 2) * 2
     target_v_res = VPC.orig_v_res - crop_top - crop_bottom
 
     if target_v_res <= 0:
         logger.error(
-            f"[vfCropComandGenerator] Invalid crop: orig_v_res={VPC.orig_v_res}, "
+            f"[_validated_crop] Invalid crop: orig_v_res={VPC.orig_v_res}, "
             f"crop={VPC.crop} produces non-positive height ({target_v_res})"
         )
-        target_v_res = VPC.orig_v_res
-        crop_top = 0
         VPC.crop = [0, 0]
-        logger.warning("[vfCropComandGenerator] Falling back to uncropped resolution")
+        logger.warning("[_validated_crop] Falling back to uncropped resolution")
+        return 0, 0, VPC.orig_v_res
+
+    return crop_top, crop_bottom, target_v_res
+
+
+def vfCropComandGenerator(VPC: VideoProcessingConfig) -> str:
+    """
+    Generate FFmpeg crop and Lanczos scale filter string with even-pixel alignment
+    and +full_chroma_int for clean 10-bit 4:2:0 scaling.
+    NOTE / TODO: Assumes square pixels (SAR 1:1); anamorphic sources are not handled.
+    """
+    crop_top, _, target_v_res = _validated_crop(VPC)
 
     command = (
         f"crop={VPC.orig_h_res}:{target_v_res}:0:{crop_top},"
@@ -664,6 +734,16 @@ def vfCropComandGenerator(VPC: VideoProcessingConfig) -> str:
     )
     logger.debug(f"[vfCropComandGenerator] Generated filter: {command}")
     return command
+
+
+def y4m_range_filter(VPC: VideoProcessingConfig) -> str:
+    """Restore source color range metadata on frames arriving from a Y4M pipe."""
+    color_range = str(VPC.VUI.get("color_range", "")).strip().lower()
+    if color_range in ("pc", "full", "jpeg"):
+        return "setparams=range=full"
+    if color_range in ("tv", "limited", "mpeg"):
+        return "setparams=range=limited"
+    return ""
 
 
 def deband_enabled(VPC: VideoProcessingConfig) -> bool:
@@ -674,6 +754,7 @@ def deband_enabled(VPC: VideoProcessingConfig) -> bool:
 def deband_source_stage(VPC: VideoProcessingConfig) -> tuple:
     """
     Returns (leading_commands, ffmpeg_input_args).
+    When deband is enabled, crop and scale run in VapourSynth before debanding.
     """
     if not deband_enabled(VPC):
         return [], ["-i", str(VPC.source_path)]
@@ -691,12 +772,16 @@ def deband_source_stage(VPC: VideoProcessingConfig) -> tuple:
     if not os.path.isabs(script):
         script = os.path.join(os.path.dirname(os.path.abspath(__file__)), script)
     cache = os.path.join(VPC.workspace, os.path.basename(str(VPC.source_path)) + ".lwi")
+    crop_top, crop_bottom, _ = _validated_crop(VPC)
 
     vspipe_cmd = [
         "vspipe", "-c", "y4m",
         "-a", f"source={VPC.source_path}",
         "-a", f"cache={cache}",
         "-a", f"options={json.dumps(options)}",
+        "-a", f"crop_top={crop_top}",
+        "-a", f"crop_bottom={crop_bottom}",
+        "-a", f"target_w={VPC.output_res}",
         script, "-",
     ]
     logger.debug(f"[deband_source_stage] Deband enabled, options: {options}")
@@ -730,32 +815,40 @@ def video_encode_ffmpeg(VPC: VideoProcessingConfig) -> bool:
     logger.debug("[video_encode_ffmpeg] Starting FFmpeg video encoding")
     logger.debug(f"[video_encode_ffmpeg] Source: {VPC.source_path} -> Target: {VPC.target_path}")
 
+    use_deband = deband_enabled(VPC)
     lead_commands, input_args = deband_source_stage(VPC)
 
     command = [
         "ffmpeg",
         *input_args,
+        "-map", "0:V:0",
         "-an",
         "-sn",
+        "-dn",
         "-pix_fmt", "yuv420p10le",
     ]
 
-    resolution_filter = vfCropComandGenerator(VPC)
+    vf_filter = y4m_range_filter(VPC) if use_deband else vfCropComandGenerator(VPC)
     video_profile_modified = VPC.profile["video"].copy()
 
-    try:
-        index = video_profile_modified.index("-vf")
-        video_profile_modified[index + 1] = video_profile_modified[index + 1] + "," + resolution_filter
-    except ValueError:
-        video_profile_modified.append("-vf")
-        video_profile_modified.append(resolution_filter)
+    if vf_filter:
+        try:
+            index = video_profile_modified.index("-vf")
+            if use_deband:
+                video_profile_modified[index + 1] = vf_filter + "," + video_profile_modified[index + 1]
+            else:
+                video_profile_modified[index + 1] = video_profile_modified[index + 1] + "," + vf_filter
+        except ValueError:
+            video_profile_modified.append("-vf")
+            video_profile_modified.append(vf_filter)
+
+    cq_flag = VPC.profile_settings.get("cq_flag") or VPC.profile.get("cq_flag", [None, "-cq"])[1]
 
     command += video_profile_modified
     command += [
-        "-copy_unknown",
         *ffmpeg_colour_args(VPC),
         "-map_metadata", "0",
-        "-cq", str(VPC.output_cq),
+        str(cq_flag), str(VPC.output_cq),
         "-y",
         VPC.target_path,
     ]
@@ -828,48 +921,19 @@ def video_ffmpeg_h265(VPC: VideoProcessingConfig) -> bool:
 def SvtAv1EncApp_encode(VPC: VideoProcessingConfig) -> bool:
     """
     Encode video files using SVT-AV1 encoder with cropping, scaling, and HDR metadata signaling.
+    NOTE / TODO: Assumes square pixels (SAR 1:1); anamorphic sources (e.g. DVDs) are not handled.
     """
-    def primaries_name_to_num(name: str) -> int:
-        if name is None:
+    def cicp_lookup(name: str, table: dict, field_label: str) -> int:
+        if not name:
             return 2
-        mapping = {
-            "bt709": 1, "unknown": 2, "unspecified": 2,
-            "bt470m": 4, "bt470bg": 5, "bt601": 6, "smpte170m": 6,
-            "smpte240m": 7, "smpte240": 7, "film": 8, "bt2020": 9,
-            "smpte428": 10, "xyz": 10, "smpte431": 11, "smpte432": 12,
-            "ebu3213": 22,
-        }
-        result = mapping.get(name.strip().lower())
+        cleaned = str(name).strip().lower()
+        if cleaned in ("unknown", "unspecified"):
+            return 2
+        result = table.get(cleaned)
         if result is None:
-            logger.warning(f"[primaries_name_to_num] Unrecognized color_primaries '{name}', defaulting to 2")
+            logger.warning(f"[SvtAv1EncApp_encode] Unrecognized {field_label} '{name}', defaulting to 2")
             return 2
         return result
-
-    def transfer_name_to_num(name: str) -> int:
-        if name is None:
-            return 2
-        mapping = {
-            "bt709": 1, "unknown": 2, "unspecified": 2,
-            "bt470m": 4, "bt470bg": 5, "bt601": 6, "smpte170m": 6,
-            "smpte240m": 7, "smpte240": 7, "linear": 8,
-            "log100": 9, "log100-sqrt10": 10, "iec61966-2-4": 11, "iec61966": 11,
-            "bt1361": 12, "iec61966-2-1": 13, "srgb": 13,
-            "bt2020-10": 14, "bt2020-12": 15, "smpte2084": 16, "pq": 16,
-            "smpte428": 17, "arib-std-b67": 18, "hlg": 18,
-        }
-        return mapping.get(name.strip().lower(), 2)
-
-    def matrix_name_to_num(name: str) -> int:
-        if name is None:
-            return 2
-        mapping = {
-            "rgb": 0, "identity": 0, "bt709": 1, "unknown": 2, "unspecified": 2,
-            "fcc": 4, "bt470bg": 5, "bt601": 6, "smpte170m": 6,
-            "smpte240m": 7, "smpte240": 7, "ycgco": 8,
-            "bt2020nc": 9, "bt2020-ncl": 9, "bt2020c": 10, "bt2020-cl": 10,
-            "smpte2085": 11, "chroma-ncl": 12, "chroma-cl": 13, "ictcp": 14,
-        }
-        return mapping.get(name.strip().lower(), 2)
 
     def chroma_sample_position_name_to_num(name: str) -> int:
         if name is None:
@@ -890,26 +954,29 @@ def SvtAv1EncApp_encode(VPC: VideoProcessingConfig) -> bool:
     logger.debug("[SvtAv1EncApp_encode] Starting SVT-AV1 video encoding")
     logger.debug(f"[SvtAv1EncApp_encode] Source: {VPC.source_path} -> Target: {VPC.target_path}")
 
-    resolution_filter = vfCropComandGenerator(VPC)
+    use_deband = deband_enabled(VPC)
+    vf_filter = y4m_range_filter(VPC) if use_deband else vfCropComandGenerator(VPC)
     lead_commands, input_args = deband_source_stage(VPC)
 
     ffmpeg_cmd = [
         "ffmpeg", "-nostdin",
         *input_args,
+        "-map", "0:V:0",
         "-pix_fmt", "yuv420p10le",
         "-f", "yuv4mpegpipe", "-strict", "-1",
-        "-an", "-sn",
-        "-vf", resolution_filter,
-        "-",
+        "-an", "-sn", "-dn",
     ]
+    if vf_filter:
+        ffmpeg_cmd += ["-vf", vf_filter]
+    ffmpeg_cmd.append("-")
 
     svt_cmd = [
         "SvtAv1EncApp", "-i", "stdin",
         "--input-depth", "10",
         "--crf", str(VPC.output_cq),
-        "--color-primaries", str(primaries_name_to_num(VPC.VUI.get("color_primaries"))),
-        "--transfer-characteristics", str(transfer_name_to_num(VPC.VUI.get("color_transfer"))),
-        "--matrix-coefficients", str(matrix_name_to_num(VPC.VUI.get("color_space"))),
+        "--color-primaries", str(cicp_lookup(VPC.VUI.get("color_primaries"), MKV_PRIMARIES, "color_primaries")),
+        "--transfer-characteristics", str(cicp_lookup(VPC.VUI.get("color_transfer"), MKV_TRANSFER, "color_transfer")),
+        "--matrix-coefficients", str(cicp_lookup(VPC.VUI.get("color_space"), MKV_MATRIX, "color_space")),
         "--color-range", str(color_range_name_to_num(VPC.VUI.get("color_range"))),
         "--chroma-sample-position", str(chroma_sample_position_name_to_num(VPC.VUI.get("chroma_location"))),
         "-b", str(VPC.target_path),
@@ -918,10 +985,11 @@ def SvtAv1EncApp_encode(VPC: VideoProcessingConfig) -> bool:
     for item in VPC.profile["video"]:
         svt_cmd += str(item).split()
 
-    if VPC.HDR_type == "HDR10":
-        svt_cmd += ["--hdr10plus-json", str(VPC.HDR10_metadata_file)]
-    elif VPC.HDR_type == "DoVi":
-        svt_cmd += ["--dolby-vision-rpu", str(VPC.dovi_metadata_file)]
+    if VPC.profile["HDR_enable"][1]:
+        if VPC.HDR_type == "HDR10":
+            svt_cmd += ["--hdr10plus-json", str(VPC.HDR10_metadata_file)]
+        elif VPC.HDR_type == "DoVi":
+            svt_cmd += ["--dolby-vision-rpu", str(VPC.dovi_metadata_file)]
 
     if VPC.SideDTA.get("Cll_exists"):
         svt_cmd += [
@@ -933,10 +1001,10 @@ def SvtAv1EncApp_encode(VPC: VideoProcessingConfig) -> bool:
         svt_cmd += [
             "--mastering-display",
             (
-                f"G({VPC.SideDTA['green_x']:.4f},{VPC.SideDTA['green_y']:.4f})"
-                f"B({VPC.SideDTA['blue_x']:.4f},{VPC.SideDTA['blue_y']:.4f})"
-                f"R({VPC.SideDTA['red_x']:.4f},{VPC.SideDTA['red_y']:.4f})"
-                f"WP({VPC.SideDTA['white_point_x']:.4f},{VPC.SideDTA['white_point_y']:.4f})"
+                f"G({VPC.SideDTA['green_x']:.5f},{VPC.SideDTA['green_y']:.5f})"
+                f"B({VPC.SideDTA['blue_x']:.5f},{VPC.SideDTA['blue_y']:.5f})"
+                f"R({VPC.SideDTA['red_x']:.5f},{VPC.SideDTA['red_y']:.5f})"
+                f"WP({VPC.SideDTA['white_point_x']:.5f},{VPC.SideDTA['white_point_y']:.5f})"
                 f"L({VPC.SideDTA['max_luminance']:.4f},{VPC.SideDTA['min_luminance']:.6f})"
             ),
         ]

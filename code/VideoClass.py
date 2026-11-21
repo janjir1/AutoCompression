@@ -1,14 +1,11 @@
 from typing import List, Union
-import AVTest
 import os
-import compressor2
 import yaml
 import subprocess
 import json
 import copy
 import logging
 from fractions import Fraction
-import weakref
 
 logger = logging.getLogger("AppLogger")
 
@@ -23,6 +20,7 @@ DEFAULT_VUI = {
 DEFAULT_SIDEDTA = {
     "Cll_exists": False,
     "Mastering_display_exists": False,
+    "dv_profile": None,
 }
 
 
@@ -33,12 +31,6 @@ class VideoProcessingConfig:
     Manages video processing parameters including input/output paths, encoding settings,
     HDR metadata handling, and temporal/spatial cropping configurations.
     """
-    crop: List[int] = [0, 0]
-    channels: Union[int, bool] = False
-    start: Union[int, bool] = False
-    duration: Union[int, bool] = False
-    subtitles: bool = False
-    HDR_type: str = "uninit"
 
     def __init__(self, input_file_path: str, output_file_name: str, workspace: str):
         """
@@ -60,6 +52,14 @@ class VideoProcessingConfig:
         self.parent = None
         self.is_final_export = False
 
+        self.crop: List[int] = [0, 0]
+        self.channels: Union[int, bool] = False
+        self.start: Union[int, bool] = False
+        self.duration: Union[int, bool] = False
+        self.subtitles: bool = False
+        self.HDR_type: str = "uninit"
+        self.dv_profile: Union[int, None] = None
+
         # Initialize VUI and SideDTA with safe defaults before analysis runs
         self.VUI = DEFAULT_VUI.copy()
         self.SideDTA = DEFAULT_SIDEDTA.copy()
@@ -75,35 +75,32 @@ class VideoProcessingConfig:
         logger.debug(f"[VideoProcessingConfig.__init__] DoVi metadata file: {self.dovi_metadata_file}")
         logger.debug(f"[VideoProcessingConfig.__init__] HDR10 metadata file: {self.HDR10_metadata_file}")
 
-    def readProfiles(self, profile_path: str, test_settings_path: str, tools_path: str):
+    def readProfiles(self, profile_path: str, test_settings_path: str):
         """
         Load encoding profiles and test settings from YAML files.
         Args:
             profile_path (str): Path to the encoding profile YAML file
             test_settings_path (str): Path to the test settings YAML file
-            tools_path (str): Path to external tools directory
         """
         logger.info("[VideoProcessingConfig.readProfiles] Loading profiles and settings")
         logger.debug(f"[VideoProcessingConfig.readProfiles] Profile path: {profile_path}")
         logger.debug(f"[VideoProcessingConfig.readProfiles] Test settings path: {test_settings_path}")
-        logger.debug(f"[VideoProcessingConfig.readProfiles] Tools path: {tools_path}")
 
         self.profile, self.profile_settings = readProfile(profile_path)
         self.test_settings = readSettings(test_settings_path)
-        self.tools_path = tools_path
         self.target_cq = self.getProfileValue(self.profile["test_settings"], "defalut_cq")
         self.output_cq = self.getProfileValue(self.profile["test_settings"], "defalut_cq")
 
-    def analyzeOriginal(self):
+    def analyzeOriginal(self) -> bool:
         """
         Analyze the original video file to extract metadata such as resolution, framerate, and duration.
+        Returns True if required stream metadata was extracted, False otherwise.
         """
         logger.info(f"[VideoProcessingConfig.analyzeOriginal] Analyzing original video file: {self.orig_file_path}")
-        print(self.tools_path)
-        self.orig_h_res = getH_res(self.orig_file_path, self.tools_path)
-        self.orig_v_res = getV_res(self.orig_file_path, self.tools_path)
-        self.orig_framerate, self.orig_framerate_fraction = get_framerate(self.orig_file_path, self.tools_path)
-        self.orig_duration = getDuration(self.orig_file_path, self.tools_path)
+        self.orig_h_res = getH_res(self.orig_file_path)
+        self.orig_v_res = getV_res(self.orig_file_path)
+        self.orig_framerate, self.orig_framerate_fraction = get_framerate(self.orig_file_path)
+        self.orig_duration = getDuration(self.orig_file_path)
         self.FS_support = get_fast_seek_support(self.orig_file_path)
         self.is_H265 = is_h265(self.orig_file_path)
         if not self.is_H265:
@@ -122,6 +119,24 @@ class VideoProcessingConfig:
             vui_data, side_data = metadata
             self.VUI = {**DEFAULT_VUI, **(vui_data or {})}
             self.SideDTA = {**DEFAULT_SIDEDTA, **(side_data or {})}
+
+        self.dv_profile = self.SideDTA.get("dv_profile")
+        if self.dv_profile == 5:
+            # TODO: Implement Dolby Vision Profile 5 conversion/reshaping
+            logger.error(
+                "[VideoProcessingConfig.analyzeOriginal] Dolby Vision Profile 5 detected "
+                "(IPTPQc2 colorspace). Conversion is not implemented yet."
+            )
+            return False
+
+        if self.orig_h_res <= 0 or self.orig_v_res <= 0 or self.orig_duration <= 0 or self.orig_framerate is False:
+            logger.error(
+                f"[VideoProcessingConfig.analyzeOriginal] Failed to probe required metadata: "
+                f"res={self.orig_h_res}x{self.orig_v_res}, duration={self.orig_duration}, fps={self.orig_framerate}"
+            )
+            return False
+
+        return True
 
     def create_copy(self):
         """Create a deepcopy that remembers its parent."""
@@ -164,6 +179,9 @@ class VideoProcessingConfig:
         if not os.path.exists(workspace):
             os.makedirs(workspace)
         self.workspace = workspace
+        self.output_file_path = os.path.join(self.workspace, self.output_file_name + ".mkv")
+        self.dovi_metadata_file = os.path.join(self.workspace, "dovi_metadata_test.bin")
+        self.HDR10_metadata_file = os.path.join(self.workspace, "HDR10_metadata_test.json")
 
     def setOutputFileName(self, name: str):
         self.output_file_name = name
@@ -257,7 +275,7 @@ def readSettings(yaml_settings):
     return data
 
 
-def getDuration(input_path: str, tools_path) -> float:
+def getDuration(input_path: str) -> float:
     """
     Retrieve the duration of a video file using FFprobe.
     Args:
@@ -300,7 +318,7 @@ def getDuration(input_path: str, tools_path) -> float:
     return 0
 
 
-def getH_res(video_path: str, tools_path) -> int:
+def getH_res(video_path: str) -> int:
     """
     Retrieves the horizontal resolution (width) of a video file using FFprobe.
 
@@ -312,7 +330,7 @@ def getH_res(video_path: str, tools_path) -> int:
     """
     logger.debug(f"[getH_res] Getting horizontal resolution for: {video_path}")
     command = [
-        "ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+        "ffprobe", "-v", "error", "-select_streams", "V:0", "-show_entries",
         "stream=width", "-of", "json", video_path,
     ]
     logger.debug(f"[getH_res] FFprobe command: {' '.join(command)}")
@@ -340,7 +358,7 @@ def getH_res(video_path: str, tools_path) -> int:
     return 0
 
 
-def getV_res(video_path: str, tools_path) -> int:
+def getV_res(video_path: str) -> int:
     """
     Retrieves the vertical resolution (height) of a video file using FFprobe.
 
@@ -353,7 +371,7 @@ def getV_res(video_path: str, tools_path) -> int:
     logger.debug(f"[getV_res] Getting vertical resolution for: {video_path}")
 
     command = [
-        "ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+        "ffprobe", "-v", "error", "-select_streams", "V:0", "-show_entries",
         "stream=height", "-of", "json", video_path,
     ]
 
@@ -380,7 +398,7 @@ def getV_res(video_path: str, tools_path) -> int:
     return 0
 
 
-def get_framerate(input_file, tools_path):
+def get_framerate(input_file):
     """
     Retrieve the video framerate using ffprobe, supporting both CFR and VFR.
     Args:
@@ -393,7 +411,7 @@ def get_framerate(input_file, tools_path):
     def probe(entry: str) -> str:
         cmd = [
             "ffprobe", "-v", "error",
-            "-select_streams", "v:0",
+            "-select_streams", "V:0",
             "-show_entries", f"stream={entry}",
             "-of", "default=noprint_wrappers=1:nokey=1",
             input_file,
@@ -417,11 +435,12 @@ def get_framerate(input_file, tools_path):
 
     try:
         # Try constant-frame-rate first, then fallback to average-frame-rate
+        # Upper limit 250 avoids Matroska's bogus 1000/1 timebase reporting as fps
         for entry in ("r_frame_rate", "avg_frame_rate"):
             raw = probe(entry)
             logger.debug(f"[get_framerate] Probe {entry}: {raw}")
             fps_float, exact_str = parse_framerate(raw)
-            if fps_float is not None and 10 <= fps_float <= 1000:
+            if fps_float is not None and 10 <= fps_float <= 250:
                 logger.debug(f"[get_framerate] Parsed {entry}: {fps_float} ({exact_str})")
                 return fps_float, exact_str
     except Exception as e:
@@ -461,7 +480,7 @@ def get_fast_seek_support(file_path: str, scan_bytes: int = 1_048_576) -> bool:
         #   Cluster  -> 0x1F43B675
         seekhead_id = b"\x11\x4D\x9B\x74"
         cues_id = b"\x1C\x53\xBB\x6B"
-        cluster_id = b"\x1F\x43\xB675" if False else b"\x1F\x43\xB6\x75"
+        cluster_id = b"\x1F\x43\xB6\x75"
 
         idx_cluster = data.find(cluster_id)
         if idx_cluster == -1:
@@ -489,7 +508,7 @@ def is_h265(file_path: str, ffprobe_path: str = "ffprobe") -> bool:
     cmd = [
         ffprobe_path,
         "-v", "error",
-        "-select_streams", "v:0",
+        "-select_streams", "V:0",
         "-show_entries", "stream=codec_name",
         "-of", "json",
         file_path,
@@ -531,7 +550,7 @@ def get_static_metadata(input_file: str):
     cmd = [
         "ffprobe",
         "-v", "quiet",
-        "-select_streams", "v:0",
+        "-select_streams", "V:0",
         "-read_intervals", "%+#1",
         "-show_streams",
         "-show_frames",
@@ -577,27 +596,38 @@ def get_static_metadata(input_file: str):
 
             sd_type = side_data.get("side_data_type", "")
 
+            if "dv_profile" in side_data and SideDTA["dv_profile"] is None:
+                try:
+                    SideDTA["dv_profile"] = int(side_data["dv_profile"])
+                except (ValueError, TypeError):
+                    pass
+
             if sd_type == "Content light level metadata" or "Content light level metadata" in side_data.values():
                 try:
-                    SideDTA["max_content"] = int(side_data["max_content"])
-                    SideDTA["max_average"] = int(side_data["max_average"])
-                    SideDTA["Cll_exists"] = True
+                    max_content = int(side_data["max_content"])
+                    max_average = int(side_data["max_average"])
+                    if max_content > 0 or max_average > 0:
+                        SideDTA["max_content"] = max_content
+                        SideDTA["max_average"] = max_average
+                        SideDTA["Cll_exists"] = True
                 except (KeyError, ValueError, TypeError) as e:
                     logger.warning(f"[get_static_metadata] Incomplete Content Light Level metadata: {e}")
 
             if sd_type == "Mastering display metadata" or "Mastering display metadata" in side_data.values():
                 try:
-                    SideDTA["red_x"] = parse_val(side_data["red_x"])
-                    SideDTA["red_y"] = parse_val(side_data["red_y"])
-                    SideDTA["green_x"] = parse_val(side_data["green_x"])
-                    SideDTA["green_y"] = parse_val(side_data["green_y"])
-                    SideDTA["blue_x"] = parse_val(side_data["blue_x"])
-                    SideDTA["blue_y"] = parse_val(side_data["blue_y"])
-                    SideDTA["white_point_x"] = parse_val(side_data["white_point_x"])
-                    SideDTA["white_point_y"] = parse_val(side_data["white_point_y"])
-                    SideDTA["min_luminance"] = parse_val(side_data["min_luminance"])
-                    SideDTA["max_luminance"] = parse_val(side_data["max_luminance"])
-                    SideDTA["Mastering_display_exists"] = True
+                    max_lum = parse_val(side_data["max_luminance"])
+                    if max_lum > 0:
+                        SideDTA["red_x"] = parse_val(side_data["red_x"])
+                        SideDTA["red_y"] = parse_val(side_data["red_y"])
+                        SideDTA["green_x"] = parse_val(side_data["green_x"])
+                        SideDTA["green_y"] = parse_val(side_data["green_y"])
+                        SideDTA["blue_x"] = parse_val(side_data["blue_x"])
+                        SideDTA["blue_y"] = parse_val(side_data["blue_y"])
+                        SideDTA["white_point_x"] = parse_val(side_data["white_point_x"])
+                        SideDTA["white_point_y"] = parse_val(side_data["white_point_y"])
+                        SideDTA["min_luminance"] = parse_val(side_data["min_luminance"])
+                        SideDTA["max_luminance"] = max_lum
+                        SideDTA["Mastering_display_exists"] = True
                 except (KeyError, ValueError, TypeError) as e:
                     logger.warning(f"[get_static_metadata] Incomplete Mastering Display metadata: {e}")
 
